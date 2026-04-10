@@ -30,3 +30,7 @@ export function onLogin(cb: (user: any) => void) {
 export function onLogout(cb: () => void) {
   netlifyIdentity.on("logout", cb);
 }
+
+netlifyIdentity.init({
+  APIUrl: "/.netlify/identity",
+});

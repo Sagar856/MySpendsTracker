@@ -1,4 +1,4 @@
-import { getAccessToken } from "../../netlify/functions/identity";
+import { getAccessToken } from "../auth/identity";
 
 export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = await getAccessToken();
