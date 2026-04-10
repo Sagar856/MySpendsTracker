@@ -2,7 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
-import { initIdentity } from "./auth/identity";
+import { initIdentity } from "../netlify/functions/identity";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 initIdentity();

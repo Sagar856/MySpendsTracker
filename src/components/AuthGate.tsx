@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { currentUser, onLogin, onLogout } from "../auth/identity";
+import { currentUser, onLogin, onLogout } from "../../netlify/functions/identity";
 import LoginPage from "../pages/LoginPage";
 
 export default function AuthGate({ children }: { children: React.ReactNode }) {

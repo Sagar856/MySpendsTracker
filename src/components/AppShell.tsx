@@ -1,6 +1,6 @@
 import { Link, NavLink } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { logout, currentUser } from "../auth/identity";
+import { logout, currentUser } from "../../netlify/functions/identity";
 import { Separator } from "@/components/ui/separator";
 import ThemeToggle from "./ThemeToggle";
 
