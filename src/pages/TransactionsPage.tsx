@@ -600,7 +600,7 @@ export default function TransactionsPage() {
               />
             </div>
 
-            <div className="lg:col-span-2">
+            <div className="sm:col-span-2">
               <label className="text-xs text-muted-foreground">Month</label>
               <Input
                 type="month"
@@ -608,7 +608,6 @@ export default function TransactionsPage() {
                 onChange={(e) => setMonth(e.target.value)}
               />
               <div className="text-[11px] text-muted-foreground mt-1">
-                Clear month to show all.
               </div>
             </div>
 
