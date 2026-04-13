@@ -119,3 +119,36 @@ export default function ResizableDataTable<T>({
           </thead>
 
           <tbody className="[&_tr:last-child]:border-0">
+            {table.getRowModel().rows.map((row) => (
+              <tr key={row.id} className="border-b transition-colors hover:bg-muted/40">
+                {row.getVisibleCells().map((cell) => {
+                  const meta = (cell.column.columnDef.meta as ColumnMeta | undefined) ?? {};
+                  return (
+                    <td
+                      key={cell.id}
+                      style={{ width: Math.max(cell.column.getSize(), minColWidth) }}
+                      className={cn("p-2 align-middle overflow-hidden", meta.className)}
+                    >
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+
+            {data.length === 0 && (
+              <tr>
+                <td
+                  className="p-4 text-center text-muted-foreground"
+                  colSpan={table.getAllLeafColumns().length}
+                >
+                  No data.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
