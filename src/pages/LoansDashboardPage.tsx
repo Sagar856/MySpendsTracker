@@ -26,7 +26,7 @@ import {
 
 import { BarChart, Bar, ResponsiveContainer, Tooltip, XAxis, YAxis, PieChart, Pie, Cell, Legend } from "recharts";
 
-const COLORS = ["#2563eb", "#16a34a", "#f97316", "#dc2626", "#9333ea", "#0ea5e9"];
+const COLORS = ["#7ccf00", "#9ae600", "#bbf451", "#5ea500", "#497d00", "#3c6300"];
 const todayISO = new Date().toISOString().slice(0, 10);
 
 export default function LoansDashboardPage() {

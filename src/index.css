@@ -2,29 +2,68 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Minimal shadcn-style tokens */
+
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-    --muted: 210 40% 96.1%;
+    /* Lime-based light theme (soft tint surfaces, lime brand actions) */
+    --background: 78 92% 95%;          /* lime-50 */
+    --foreground: 222.2 84% 4.9%;      /* neutral dark text */
+
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+
+    --muted: 79 89% 89%;               /* lime-100 */
     --muted-foreground: 215.4 16.3% 46.9%;
-    --border: 214.3 31.8% 91.4%;
-    --primary: 221.2 83.2% 53.3%;
-    --primary-foreground: 210 40% 98%;
+
+    --border: 81 89% 79%;              /* lime-200 */
+    --input: 81 89% 79%;               /* lime-200 */
+    --ring: 80 100% 45%;               /* lime-400 */
+
+    --primary: 86 100% 32%;            /* lime-600 (buttons) */
+    --primary-foreground: 78 92% 95%;  /* lime-50 (text on primary) */
+
+    --secondary: 81 89% 79%;           /* lime-200 */
+    --secondary-foreground: 222.2 84% 4.9%;
+
+    --accent: 79 89% 89%;              /* lime-100 (hover backgrounds) */
+    --accent-foreground: 222.2 84% 4.9%;
+
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
+
     --radius: 0.75rem;
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --border: 217.2 32.6% 17.5%;
-    --primary: 217.2 91.2% 59.8%;
-    --primary-foreground: 222.2 47.4% 11.2%;
+    /* Lime-based dark theme (deep lime background, bright lime primary) */
+    --background: 89 88% 10%;          /* lime-950 */
+    --foreground: 78 92% 95%;          /* lime-50 */
+
+    --card: 86 71% 19%;                /* lime-900 */
+    --card-foreground: 78 92% 95%;
+
+    --popover: 86 71% 19%;
+    --popover-foreground: 78 92% 95%;
+
+    --muted: 84 100% 19%;              /* lime-800 */
+    --muted-foreground: 81 89% 79%;    /* lime-200 */
+
+    --border: 84 100% 19%;             /* lime-800 */
+    --input: 84 100% 19%;              /* lime-800 */
+    --ring: 80 100% 45%;               /* lime-400 */
+
+    --primary: 84 100% 41%;            /* lime-500 */
+    --primary-foreground: 89 88% 10%;  /* lime-950 */
+
+    --secondary: 84 100% 19%;          /* lime-800 */
+    --secondary-foreground: 78 92% 95%;
+
+    --accent: 84 100% 19%;             /* lime-800 */
+    --accent-foreground: 78 92% 95%;
+
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 210 40% 98%;
   }
