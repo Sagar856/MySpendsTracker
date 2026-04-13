@@ -135,7 +135,7 @@ export default function LoansDashboardPage() {
 
       <Card>
         <CardHeader><CardTitle>Filters</CardTitle></CardHeader>
-        <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <CardContent className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           <div>
             <label className="text-xs text-muted-foreground">Person</label>
             <Select value={person} onValueChange={setPerson}>
@@ -223,65 +223,67 @@ export default function LoansDashboardPage() {
       <Card>
         <CardHeader><CardTitle>All Loan Records</CardTitle></CardHeader>
         <CardContent>
-          <div className="overflow-auto border rounded-md">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>ID</TableHead>
-                  <TableHead>Person</TableHead>
-                  <TableHead>Initial</TableHead>
-                  <TableHead>Total</TableHead>
-                  <TableHead>LoanOrLend</TableHead>
-                  <TableHead>Balance</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-
-              <TableBody>
-                {filtered.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell>{r.id}</TableCell>
-                    <TableCell>{r.person}</TableCell>
-                    <TableCell>{r.initialDate}</TableCell>
-                    <TableCell>{formatINR(r.totalAmount)}</TableCell>
-                    <TableCell>
-                      <Badge variant={r.loanOrLend === "Loan" ? "destructive" : "default"}>
-                        {r.loanOrLend}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>{formatINR(r.balanceAmount)}</TableCell>
-                    <TableCell>{r.status}</TableCell>
-                    <TableCell className="text-right space-x-2">
-                      <Button size="sm" variant="outline" onClick={() => openEdit(r)}>Edit</Button>
-
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button size="sm" variant="destructive" disabled={deleteMut.isPending}>Delete</Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Delete loan record #{r.id}?</AlertDialogTitle>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Cancel</AlertDialogCancel>
-                            <AlertDialogAction onClick={() => deleteMut.mutate(r.id)}>Delete</AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-                    </TableCell>
-                  </TableRow>
-                ))}
-
-                {filtered.length === 0 && (
+          <div className="w-full overflow-x-auto border rounded-md">
+            <div className="min-w-[1050px]">
+              <Table>
+                <TableHeader>
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center text-muted-foreground">
-                      No records match the filters.
-                    </TableCell>
+                    <TableHead>ID</TableHead>
+                    <TableHead>Person</TableHead>
+                    <TableHead>Initial</TableHead>
+                    <TableHead>Total</TableHead>
+                    <TableHead>LoanOrLend</TableHead>
+                    <TableHead>Balance</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
-                )}
-              </TableBody>
-            </Table>
+                </TableHeader>
+
+                <TableBody>
+                  {filtered.map((r) => (
+                    <TableRow key={r.id}>
+                      <TableCell>{r.id}</TableCell>
+                      <TableCell>{r.person}</TableCell>
+                      <TableCell>{r.initialDate}</TableCell>
+                      <TableCell>{formatINR(r.totalAmount)}</TableCell>
+                      <TableCell>
+                        <Badge variant={r.loanOrLend === "Loan" ? "destructive" : "default"}>
+                          {r.loanOrLend}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>{formatINR(r.balanceAmount)}</TableCell>
+                      <TableCell>{r.status}</TableCell>
+                      <TableCell className="text-right space-x-2">
+                        <Button size="sm" variant="outline" onClick={() => openEdit(r)}>Edit</Button>
+
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button size="sm" variant="destructive" disabled={deleteMut.isPending}>Delete</Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Delete loan record #{r.id}?</AlertDialogTitle>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction onClick={() => deleteMut.mutate(r.id)}>Delete</AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+
+                  {filtered.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={8} className="text-center text-muted-foreground">
+                        No records match the filters.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
           </div>
         </CardContent>
       </Card>

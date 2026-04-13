@@ -203,7 +203,7 @@ export default function TransactionsPage() {
             Add finance records or loan/lend records. All entries are stored in Google Sheets.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <Badge variant="secondary">Credit: {formatINR(totalCredit)}</Badge>
           <Badge variant="secondary">Debit: {formatINR(totalDebit)}</Badge>
           <Badge variant={net >= 0 ? "default" : "destructive"}>Net: {formatINR(net)}</Badge>
@@ -221,7 +221,7 @@ export default function TransactionsPage() {
             <CardHeader>
               <CardTitle>Add Finance Record</CardTitle>
             </CardHeader>
-            <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <CardContent className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <div>
                 <label className="text-xs text-muted-foreground">Date</label>
                 <Input type="date" value={finance.date} onChange={(e) => setFinance(s => ({ ...s, date: e.target.value }))} />
@@ -302,7 +302,7 @@ export default function TransactionsPage() {
             <CardHeader>
               <CardTitle>Add Loan / Lend Record</CardTitle>
             </CardHeader>
-            <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <CardContent className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <div>
                 <label className="text-xs text-muted-foreground">Date</label>
                 <Input type="date" value={loan.date} onChange={(e) => setLoan(s => ({ ...s, date: e.target.value }))} />
@@ -409,77 +409,77 @@ export default function TransactionsPage() {
         </CardHeader>
 
         <CardContent>
-          <div className="overflow-auto border rounded-md">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>ID</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Account</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead>{/* Place/Person */}Place / Person</TableHead>
-                  <TableHead>Ref</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-
-              <TableBody>
-                {filtered.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell>{r.id}</TableCell>
-                    <TableCell>{r.date}</TableCell>
-                    <TableCell>{formatINR(r.amount)}</TableCell>
-                    <TableCell>
-                      <Badge variant={LOAN_CATEGORIES.includes(r.category as any) ? "secondary" : "outline"}>
-                        {r.category}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>{r.tranType}</TableCell>
-                    <TableCell>{r.account}</TableCell>
-                    <TableCell className="max-w-[320px] truncate">{r.description}</TableCell>
-                    <TableCell className="max-w-[200px] truncate">
-                      {r.place}
-                    </TableCell>
-                    <TableCell className="max-w-[120px] truncate">{r.referenceId}</TableCell>
-                    <TableCell className="text-right space-x-2">
-                      <Button variant="outline" size="sm" onClick={() => openEdit(r)}>
-                        Edit
-                      </Button>
-
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button variant="destructive" size="sm" disabled={deleteMut.isPending}>
-                            Delete
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Delete record #{r.id}?</AlertDialogTitle>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Cancel</AlertDialogCancel>
-                            <AlertDialogAction onClick={() => deleteMut.mutate(r.id)}>
-                              Delete
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
-                    </TableCell>
-                  </TableRow>
-                ))}
-
-                {filtered.length === 0 && (
+          <div className="w-full overflow-x-auto border rounded-md">
+            <div className="min-w-[1100px]">
+              <Table>
+                <TableHeader>
                   <TableRow>
-                    <TableCell colSpan={10} className="text-center text-muted-foreground">
-                      No records match the search.
-                    </TableCell>
+                    <TableHead>ID</TableHead>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Amount</TableHead>
+                    <TableHead>Category</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Account</TableHead>
+                    <TableHead>Description</TableHead>
+                    <TableHead>{/* Place/Person */}Place / Person</TableHead>
+                    <TableHead>Ref</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
-                )}
-              </TableBody>
-            </Table>
+                </TableHeader>
+
+                <TableBody>
+                  {filtered.map((r) => (
+                    <TableRow key={r.id}>
+                      <TableCell>{r.id}</TableCell>
+                      <TableCell>{r.date}</TableCell>
+                      <TableCell>{formatINR(r.amount)}</TableCell>
+                      <TableCell>
+                        <Badge variant={LOAN_CATEGORIES.includes(r.category as any) ? "secondary" : "outline"}>
+                          {r.category}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>{r.tranType}</TableCell>
+                      <TableCell>{r.account}</TableCell>
+                      <TableCell className="max-w-[180px] sm:max-w-[260px] truncate">{r.description}</TableCell>
+                      <TableCell className="max-w-[140px] sm:max-w-[200px] truncate">{r.place}</TableCell>
+                      <TableCell className="max-w-[120px] truncate">{r.referenceId}</TableCell>
+                      <TableCell className="text-right space-x-2">
+                        <Button variant="outline" size="sm" onClick={() => openEdit(r)}>
+                          Edit
+                        </Button>
+
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button variant="destructive" size="sm" disabled={deleteMut.isPending}>
+                              Delete
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Delete record #{r.id}?</AlertDialogTitle>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction onClick={() => deleteMut.mutate(r.id)}>
+                                Delete
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+
+                  {filtered.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={10} className="text-center text-muted-foreground">
+                        No records match the search.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
           </div>
         </CardContent>
       </Card>
