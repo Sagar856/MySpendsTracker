@@ -39,6 +39,7 @@ import {
   LOAN_CATEGORIES,
   TRAN_TYPES,
   DAILY_PERSON_LIKE_CATEGORIES,
+  INVESTMENT_CATEGORIES,
 } from "../lib/constants";
 import { formatINR, mmddyyyyToISO, safeLower } from "../lib/format";
 
@@ -65,6 +66,13 @@ type LoanDraft = {
 };
 
 const todayISO = new Date().toISOString().slice(0, 10);
+const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+
+function yearMonthFromDailyDate(mmddyyyy: string) {
+  const iso = mmddyyyyToISO(mmddyyyy);
+  if (!iso) return "";
+  return iso.slice(0, 7);
+}
 
 export default function TransactionsPage() {
   const qc = useQueryClient();
@@ -115,38 +123,119 @@ export default function TransactionsPage() {
     },
   });
 
+  // ---- Quick Filters
+  const [month, setMonth] = useState<string>(currentMonth); // set "" for all
+  const [categoryFilter, setCategoryFilter] = useState<string>("All");
+  const [accountFilter, setAccountFilter] = useState<string>("All");
+  const [typeFilter, setTypeFilter] = useState<string>("All"); // Credit/Debit/All
+
+  const [onlyInvestments, setOnlyInvestments] = useState(false);
+  const [onlyLoans, setOnlyLoans] = useState(false);
+
   // ---- Search
   const [q, setQ] = useState("");
-  const filtered = useMemo(() => {
-    const qq = safeLower(q).trim();
-    if (!qq) return records;
-    return records.filter((r) => {
-      const hay = [
-        r.id,
-        r.date,
-        r.category,
-        r.tranType,
-        r.account,
-        r.description,
-        r.place,
-        r.referenceId,
-      ]
-        .map((x) => safeLower(x))
-        .join(" | ");
-      return hay.includes(qq);
-    });
-  }, [records, q]);
 
-  // ---- Totals
+  const categoryOptions = useMemo(() => {
+    const set = new Set(records.map((r) => r.category).filter(Boolean));
+    return ["All", ...Array.from(set).sort()];
+  }, [records]);
+
+  const accountOptions = useMemo(() => {
+    const set = new Set(records.map((r) => r.account).filter(Boolean));
+    return ["All", ...Array.from(set).sort()];
+  }, [records]);
+
+  const typeOptions = ["All", "Credit", "Debit"];
+
+  const filtered = useMemo(() => {
+    let rows = [...records];
+
+    // Month filter
+    if (month) {
+      rows = rows.filter((r) => yearMonthFromDailyDate(r.date) === month);
+    }
+
+    // Only investments / only loans (mutually exclusive)
+    if (onlyInvestments) {
+      rows = rows.filter((r) => INVESTMENT_CATEGORIES.includes(r.category as any));
+    }
+    if (onlyLoans) {
+      rows = rows.filter((r) => LOAN_CATEGORIES.includes(r.category as any));
+    }
+
+    // Category
+    if (categoryFilter !== "All") {
+      rows = rows.filter((r) => r.category === categoryFilter);
+    }
+
+    // Account
+    if (accountFilter !== "All") {
+      rows = rows.filter((r) => r.account === accountFilter);
+    }
+
+    // Credit/Debit
+    if (typeFilter !== "All") {
+      rows = rows.filter((r) => safeLower(r.tranType) === safeLower(typeFilter));
+    }
+
+    // Search (applies after filters)
+    const qq = safeLower(q).trim();
+    if (qq) {
+      rows = rows.filter((r) => {
+        const hay = [
+          r.id,
+          r.date,
+          r.category,
+          r.tranType,
+          r.account,
+          r.description,
+          r.place,
+          r.referenceId,
+        ]
+          .map((x) => safeLower(x))
+          .join(" | ");
+        return hay.includes(qq);
+      });
+    }
+
+    return rows;
+  }, [
+    records,
+    month,
+    onlyInvestments,
+    onlyLoans,
+    categoryFilter,
+    accountFilter,
+    typeFilter,
+    q,
+  ]);
+
+  // ---- Totals on filtered
   const totalCredit = useMemo(
-    () => filtered.filter((r) => safeLower(r.tranType) === "credit").reduce((a, r) => a + (r.amount || 0), 0),
+    () =>
+      filtered
+        .filter((r) => safeLower(r.tranType) === "credit")
+        .reduce((a, r) => a + (r.amount || 0), 0),
     [filtered]
   );
   const totalDebit = useMemo(
-    () => filtered.filter((r) => safeLower(r.tranType) === "debit").reduce((a, r) => a + (r.amount || 0), 0),
+    () =>
+      filtered
+        .filter((r) => safeLower(r.tranType) === "debit")
+        .reduce((a, r) => a + (r.amount || 0), 0),
     [filtered]
   );
   const net = totalCredit - totalDebit;
+
+  function clearFilters() {
+    setMonth(""); // show all months
+    setCategoryFilter("All");
+    setAccountFilter("All");
+    setTypeFilter("All");
+    setOnlyInvestments(false);
+    setOnlyLoans(false);
+    setQ("");
+  }
 
   // ---- Edit dialog
   const [editing, setEditing] = useState<DailyRecord | null>(null);
@@ -201,12 +290,13 @@ export default function TransactionsPage() {
       {
         accessorKey: "category",
         header: "Category",
-        size: 160,
+        size: 170,
         cell: ({ row }) => {
           const cat = row.original.category;
           const isLoanLike = LOAN_CATEGORIES.includes(cat as any);
+          const isInv = INVESTMENT_CATEGORIES.includes(cat as any);
           return (
-            <Badge variant={isLoanLike ? "secondary" : "outline"}>
+            <Badge variant={isLoanLike ? "secondary" : isInv ? "default" : "outline"}>
               {cat || "NA"}
             </Badge>
           );
@@ -226,7 +316,7 @@ export default function TransactionsPage() {
       {
         accessorKey: "description",
         header: "Description",
-        size: 320,
+        size: 340,
         cell: ({ row }) => (
           <span className="block truncate" title={row.original.description}>
             {row.original.description}
@@ -304,7 +394,7 @@ export default function TransactionsPage() {
         <div className="min-w-0">
           <h1 className="text-xl font-semibold">Transactions</h1>
           <p className="text-sm text-muted-foreground">
-            Add finance records or loan/lend records. All entries are stored in Google Sheets.
+            Add finance records or loan/lend records. Filters apply to the Daily table below.
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -498,16 +588,107 @@ export default function TransactionsPage() {
       <Card>
         <CardHeader className="gap-2">
           <CardTitle>All Daily Records</CardTitle>
-          <div className="flex flex-col md:flex-row gap-2 md:items-center md:justify-between">
-            <Input
-              placeholder="Search by category, description, place/person, id, account…"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              className="md:max-w-md"
-            />
-            <div className="text-sm text-muted-foreground">
-              Showing <b>{filtered.length}</b> of {records.length}
+
+          {/* Filters row */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-2 items-end">
+            <div className="lg:col-span-4">
+              <label className="text-xs text-muted-foreground">Search</label>
+              <Input
+                placeholder="Search description, place/person, id, category…"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+              />
             </div>
+
+            <div className="lg:col-span-2">
+              <label className="text-xs text-muted-foreground">Month</label>
+              <Input
+                type="month"
+                value={month}
+                onChange={(e) => setMonth(e.target.value)}
+              />
+              <div className="text-[11px] text-muted-foreground mt-1">
+                Clear month to show all.
+              </div>
+            </div>
+
+            <div className="lg:col-span-2">
+              <label className="text-xs text-muted-foreground">Category</label>
+              <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {categoryOptions.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="lg:col-span-2">
+              <label className="text-xs text-muted-foreground">Account</label>
+              <Select value={accountFilter} onValueChange={setAccountFilter}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {accountOptions.map((a) => <SelectItem key={a} value={a}>{a}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="lg:col-span-2">
+              <label className="text-xs text-muted-foreground">Credit/Debit</label>
+              <Select value={typeFilter} onValueChange={setTypeFilter}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {typeOptions.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="lg:col-span-12 flex flex-wrap gap-2 pt-2">
+              <Button
+                size="sm"
+                variant={onlyInvestments ? "default" : "outline"}
+                onClick={() => {
+                  setOnlyInvestments((v) => {
+                    const next = !v;
+                    if (next) setOnlyLoans(false);
+                    return next;
+                  });
+                }}
+              >
+                Only Investments
+              </Button>
+
+              <Button
+                size="sm"
+                variant={onlyLoans ? "default" : "outline"}
+                onClick={() => {
+                  setOnlyLoans((v) => {
+                    const next = !v;
+                    if (next) setOnlyInvestments(false);
+                    return next;
+                  });
+                }}
+              >
+                Only Loans/Lends
+              </Button>
+
+              <Button size="sm" variant="secondary" onClick={clearFilters}>
+                Clear Filters
+              </Button>
+
+              <div className="ml-auto text-sm text-muted-foreground">
+                Showing <b>{filtered.length}</b> of {records.length}
+              </div>
+            </div>
+          </div>
+
+          {/* Active filter chips */}
+          <div className="flex flex-wrap gap-2 pt-2">
+            {month && <Badge variant="outline">Month: {month}</Badge>}
+            {categoryFilter !== "All" && <Badge variant="outline">Category: {categoryFilter}</Badge>}
+            {accountFilter !== "All" && <Badge variant="outline">Account: {accountFilter}</Badge>}
+            {typeFilter !== "All" && <Badge variant="outline">Type: {typeFilter}</Badge>}
+            {onlyInvestments && <Badge variant="outline">Investments only</Badge>}
+            {onlyLoans && <Badge variant="outline">Loans/Lends only</Badge>}
           </div>
         </CardHeader>
 
@@ -515,15 +696,17 @@ export default function TransactionsPage() {
           <ResizableDataTable
             data={filtered}
             columns={columns}
-            storageKey="daily-table-widths"
+            storageKey="loans-table-widths"
             getRowId={(r) => String(r.id)}
+            maxHeight="65vh"
           />
           <div className="mt-2 text-xs text-muted-foreground">
-            Tip: Drag the right edge of any column header to resize. Widths are saved in your browser.
+            Tip: Drag the right edge of a column header to resize. Long text is trimmed; hover to see full value.
           </div>
         </CardContent>
       </Card>
 
+      {/* Edit dialog */}
       <Dialog
         open={!!editing}
         onOpenChange={(v) => {

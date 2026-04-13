@@ -15,8 +15,15 @@ type ColumnMeta = {
 type Props<T> = {
   data: T[];
   columns: ColumnDef<T, any>[];
-  storageKey: string; // persists widths like Excel
+  storageKey: string;
   getRowId: (row: T) => string;
+
+  /** Enables vertical scroll inside table container */
+  maxHeight?: string | number; // e.g. "70vh" or 520
+
+  /** Keeps headers visible while vertically scrolling */
+  stickyHeader?: boolean;
+
   minColWidth?: number;
 };
 
@@ -25,6 +32,8 @@ export default function ResizableDataTable<T>({
   columns,
   storageKey,
   getRowId,
+  maxHeight = "70vh",
+  stickyHeader = true,
   minColWidth = 60,
 }: Props<T>) {
   const initialSizing = useMemo<ColumnSizingState>(() => {
@@ -59,80 +68,54 @@ export default function ResizableDataTable<T>({
   });
 
   return (
-    <div className="w-full overflow-x-auto border rounded-md">
-      <table className="w-full table-fixed text-sm">
-        <thead className="[&_tr]:border-b">
-          {table.getHeaderGroups().map((hg) => (
-            <tr key={hg.id}>
-              {hg.headers.map((header) => {
-                const meta = (header.column.columnDef.meta as ColumnMeta | undefined) ?? {};
-                return (
-                  <th
-                    key={header.id}
-                    style={{ width: header.getSize() }}
-                    className={cn(
-                      "group relative h-10 px-2 text-left align-middle font-medium text-muted-foreground select-none",
-                      meta.className
-                    )}
-                  >
-                    {header.isPlaceholder
-                      ? null
-                      : flexRender(header.column.columnDef.header, header.getContext())}
+    <div className="w-full border rounded-md overflow-hidden">
+      {/* Scroll container: both vertical + horizontal */}
+      <div
+        className="w-full overflow-auto"
+        style={{ maxHeight: typeof maxHeight === "number" ? `${maxHeight}px` : maxHeight }}
+      >
+        <table className="w-full table-fixed text-sm">
+          <thead className="[&_tr]:border-b">
+            {table.getHeaderGroups().map((hg) => (
+              <tr key={hg.id}>
+                {hg.headers.map((header) => {
+                  const meta = (header.column.columnDef.meta as ColumnMeta | undefined) ?? {};
+                  return (
+                    <th
+                      key={header.id}
+                      style={{ width: header.getSize() }}
+                      className={cn(
+                        "group relative h-10 px-2 text-left align-middle font-medium text-muted-foreground select-none",
+                        stickyHeader && "sticky top-0 z-10 bg-background",
+                        meta.className
+                      )}
+                    >
+                      {header.isPlaceholder
+                        ? null
+                        : flexRender(header.column.columnDef.header, header.getContext())}
 
-                    {header.column.getCanResize() && (
-                      <div
-                        onMouseDown={header.getResizeHandler()}
-                        onTouchStart={header.getResizeHandler()}
-                        className={cn(
-                          "absolute right-0 top-0 h-full w-2 cursor-col-resize touch-none",
-                          "opacity-0 group-hover:opacity-100"
-                        )}
-                        style={{
-                          background: header.column.getIsResizing()
-                            ? "hsl(var(--primary))"
-                            : "transparent",
-                          opacity: header.column.getIsResizing() ? 0.35 : undefined,
-                        }}
-                        title="Drag to resize"
-                      />
-                    )}
-                  </th>
-                );
-              })}
-            </tr>
-          ))}
-        </thead>
+                      {header.column.getCanResize() && (
+                        <div
+                          onMouseDown={header.getResizeHandler()}
+                          onTouchStart={header.getResizeHandler()}
+                          className={cn(
+                            "absolute right-0 top-0 h-full w-2 cursor-col-resize touch-none",
+                            "opacity-0 group-hover:opacity-100"
+                          )}
+                          style={{
+                            background: header.column.getIsResizing()
+                              ? "hsl(var(--primary))"
+                              : "transparent",
+                            opacity: header.column.getIsResizing() ? 0.35 : undefined,
+                          }}
+                          title="Drag to resize"
+                        />
+                      )}
+                    </th>
+                  );
+                })}
+              </tr>
+            ))}
+          </thead>
 
-        <tbody className="[&_tr:last-child]:border-0">
-          {table.getRowModel().rows.map((row) => (
-            <tr key={row.id} className="border-b transition-colors hover:bg-muted/40">
-              {row.getVisibleCells().map((cell) => {
-                const meta = (cell.column.columnDef.meta as ColumnMeta | undefined) ?? {};
-                return (
-                  <td
-                    key={cell.id}
-                    style={{ width: Math.max(cell.column.getSize(), minColWidth) }}
-                    className={cn("p-2 align-middle overflow-hidden", meta.className)}
-                  >
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-
-          {data.length === 0 && (
-            <tr>
-              <td
-                className="p-4 text-center text-muted-foreground"
-                colSpan={table.getAllLeafColumns().length}
-              >
-                No data.
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-    </div>
-  );
-}
+          <tbody className="[&_tr:last-child]:border-0">

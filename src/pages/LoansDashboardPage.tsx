@@ -34,7 +34,6 @@ export default function LoansDashboardPage() {
   const { data, isLoading, error } = useQuery({ queryKey: ["loans"], queryFn: listLoans });
   const records = data?.records ?? [];
 
-  // Filters
   const people = useMemo(
     () => ["All", ...Array.from(new Set(records.map(r => r.person).filter(Boolean))).sort()],
     [records]
@@ -68,7 +67,6 @@ export default function LoansDashboardPage() {
     return { loan, lend, count: filtered.length };
   }, [filtered]);
 
-  // Charts
   const byPerson = useMemo(() => {
     const map = new Map<string, number>();
     for (const r of filtered) map.set(r.person || "Unknown", (map.get(r.person || "Unknown") || 0) + (r.totalAmount || 0));
@@ -89,7 +87,6 @@ export default function LoansDashboardPage() {
     return Array.from(map.entries()).map(([name, value]) => ({ name, value }));
   }, [filtered]);
 
-  // Edit / delete
   const [editing, setEditing] = useState<LoanRecord | null>(null);
   const [draft, setDraft] = useState({
     person: "",
@@ -138,7 +135,7 @@ export default function LoansDashboardPage() {
       {
         accessorKey: "person",
         header: "Person",
-        size: 200,
+        size: 220,
         cell: ({ row }) => (
           <span className="block truncate" title={row.original.person}>
             {row.original.person}
@@ -171,7 +168,7 @@ export default function LoansDashboardPage() {
       {
         accessorKey: "status",
         header: "Status",
-        size: 120,
+        size: 140,
         meta: { className: "hidden lg:table-cell" },
         cell: ({ row }) => (
           <span className="block truncate" title={row.original.status}>
@@ -320,8 +317,9 @@ export default function LoansDashboardPage() {
           <ResizableDataTable
             data={filtered}
             columns={columns}
-            storageKey="loans-table-widths"
+            storageKey="daily-table-widths"
             getRowId={(r) => String(r.id)}
+            maxHeight="65vh"
           />
           <div className="mt-2 text-xs text-muted-foreground">
             Tip: Drag column edges to resize. Long text is trimmed; hover to see full value.
