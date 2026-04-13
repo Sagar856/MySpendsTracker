@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { ColumnDef } from "@tanstack/react-table";
+
 import { listLoans, updateLoan, deleteLoan, type LoanRecord } from "../api/loans";
 import { formatINR, mmddyyyyToISO, safeLower } from "../lib/format";
 
@@ -11,10 +13,6 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table";
-
-import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 
@@ -23,6 +21,8 @@ import {
   AlertDialogHeader, AlertDialogTitle, AlertDialogFooter,
   AlertDialogCancel, AlertDialogAction,
 } from "@/components/ui/alert-dialog";
+
+import ResizableDataTable from "@/components/ResizableDataTable";
 
 import { BarChart, Bar, ResponsiveContainer, Tooltip, XAxis, YAxis, PieChart, Pie, Cell, Legend } from "recharts";
 
@@ -35,9 +35,18 @@ export default function LoansDashboardPage() {
   const records = data?.records ?? [];
 
   // Filters
-  const people = useMemo(() => ["All", ...Array.from(new Set(records.map(r => r.person).filter(Boolean))).sort()], [records]);
-  const loanOrLendOptions = useMemo(() => ["All", ...Array.from(new Set(records.map(r => r.loanOrLend).filter(Boolean))).sort()], [records]);
-  const statusOptions = useMemo(() => ["All", ...Array.from(new Set(records.map(r => r.status).filter(Boolean))).sort()], [records]);
+  const people = useMemo(
+    () => ["All", ...Array.from(new Set(records.map(r => r.person).filter(Boolean))).sort()],
+    [records]
+  );
+  const loanOrLendOptions = useMemo(
+    () => ["All", ...Array.from(new Set(records.map(r => r.loanOrLend).filter(Boolean))).sort()],
+    [records]
+  );
+  const statusOptions = useMemo(
+    () => ["All", ...Array.from(new Set(records.map(r => r.status).filter(Boolean))).sort()],
+    [records]
+  );
 
   const [person, setPerson] = useState("All");
   const [kind, setKind] = useState("All");
@@ -80,7 +89,7 @@ export default function LoansDashboardPage() {
     return Array.from(map.entries()).map(([name, value]) => ({ name, value }));
   }, [filtered]);
 
-  // Edit / delete (Loans sheet)
+  // Edit / delete
   const [editing, setEditing] = useState<LoanRecord | null>(null);
   const [draft, setDraft] = useState({
     person: "",
@@ -122,6 +131,91 @@ export default function LoansDashboardPage() {
       transferredAmount: r.transferredAmount || 0,
     });
   }
+
+  const columns = useMemo<ColumnDef<LoanRecord>[]>(() => {
+    return [
+      { accessorKey: "id", header: "ID", size: 70 },
+      {
+        accessorKey: "person",
+        header: "Person",
+        size: 200,
+        cell: ({ row }) => (
+          <span className="block truncate" title={row.original.person}>
+            {row.original.person}
+          </span>
+        ),
+      },
+      { accessorKey: "initialDate", header: "Initial", size: 120, meta: { className: "hidden md:table-cell" } },
+      {
+        id: "totalAmount",
+        header: "Total",
+        size: 140,
+        cell: ({ row }) => formatINR(row.original.totalAmount),
+      },
+      {
+        accessorKey: "loanOrLend",
+        header: "Type",
+        size: 110,
+        cell: ({ row }) => (
+          <Badge variant={row.original.loanOrLend === "Loan" ? "destructive" : "default"}>
+            {row.original.loanOrLend}
+          </Badge>
+        ),
+      },
+      {
+        id: "balanceAmount",
+        header: "Balance",
+        size: 140,
+        cell: ({ row }) => formatINR(row.original.balanceAmount),
+      },
+      {
+        accessorKey: "status",
+        header: "Status",
+        size: 120,
+        meta: { className: "hidden lg:table-cell" },
+        cell: ({ row }) => (
+          <span className="block truncate" title={row.original.status}>
+            {row.original.status}
+          </span>
+        ),
+      },
+      {
+        id: "actions",
+        header: "Actions",
+        size: 160,
+        enableResizing: false,
+        cell: ({ row }) => {
+          const r = row.original;
+          return (
+            <div className="flex justify-end gap-2">
+              <Button size="sm" variant="outline" onClick={() => openEdit(r)}>
+                Edit
+              </Button>
+
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button size="sm" variant="destructive" disabled={deleteMut.isPending}>
+                    Delete
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete loan record #{r.id}?</AlertDialogTitle>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={() => deleteMut.mutate(r.id)}>
+                      Delete
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
+          );
+        },
+      },
+    ];
+  }, [deleteMut.isPending]);
 
   if (isLoading) return <div>Loading…</div>;
   if (error) return <div className="text-destructive">Failed to load Loans data.</div>;
@@ -166,7 +260,7 @@ export default function LoansDashboardPage() {
             </Select>
           </div>
 
-          <div className="md:col-span-3 flex gap-2 flex-wrap">
+          <div className="lg:col-span-3 flex gap-2 flex-wrap">
             <Badge variant="secondary">Loan Outstanding: {formatINR(outstanding.loan)}</Badge>
             <Badge variant="secondary">Lend Outstanding: {formatINR(outstanding.lend)}</Badge>
             <Badge variant="outline">Records: {outstanding.count}</Badge>
@@ -183,7 +277,7 @@ export default function LoansDashboardPage() {
                 <XAxis dataKey="name" hide />
                 <YAxis />
                 <Tooltip formatter={(v: any) => formatINR(Number(v))} />
-                <Bar dataKey="value" fill="#0ea5e9" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="value" fill="#7ccf00" radius={[6, 6, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </CardContent>
@@ -223,67 +317,14 @@ export default function LoansDashboardPage() {
       <Card>
         <CardHeader><CardTitle>All Loan Records</CardTitle></CardHeader>
         <CardContent>
-          <div className="w-full overflow-x-auto border rounded-md">
-            <div className="min-w-[1050px]">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>ID</TableHead>
-                    <TableHead>Person</TableHead>
-                    <TableHead>Initial</TableHead>
-                    <TableHead>Total</TableHead>
-                    <TableHead>LoanOrLend</TableHead>
-                    <TableHead>Balance</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-
-                <TableBody>
-                  {filtered.map((r) => (
-                    <TableRow key={r.id}>
-                      <TableCell>{r.id}</TableCell>
-                      <TableCell>{r.person}</TableCell>
-                      <TableCell>{r.initialDate}</TableCell>
-                      <TableCell>{formatINR(r.totalAmount)}</TableCell>
-                      <TableCell>
-                        <Badge variant={r.loanOrLend === "Loan" ? "destructive" : "default"}>
-                          {r.loanOrLend}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{formatINR(r.balanceAmount)}</TableCell>
-                      <TableCell>{r.status}</TableCell>
-                      <TableCell className="text-right space-x-2">
-                        <Button size="sm" variant="outline" onClick={() => openEdit(r)}>Edit</Button>
-
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button size="sm" variant="destructive" disabled={deleteMut.isPending}>Delete</Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Delete loan record #{r.id}?</AlertDialogTitle>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancel</AlertDialogCancel>
-                              <AlertDialogAction onClick={() => deleteMut.mutate(r.id)}>Delete</AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-
-                  {filtered.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={8} className="text-center text-muted-foreground">
-                        No records match the filters.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
+          <ResizableDataTable
+            data={filtered}
+            columns={columns}
+            storageKey="loans-table-widths"
+            getRowId={(r) => String(r.id)}
+          />
+          <div className="mt-2 text-xs text-muted-foreground">
+            Tip: Drag column edges to resize. Long text is trimmed; hover to see full value.
           </div>
         </CardContent>
       </Card>

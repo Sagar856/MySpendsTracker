@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { ColumnDef } from "@tanstack/react-table";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,16 +27,9 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+
+import ResizableDataTable from "@/components/ResizableDataTable";
 
 import { addDaily, deleteDaily, listDaily, updateDaily, type DailyRecord } from "../api/daily";
 import { addLoanTransaction } from "../api/loans";
@@ -121,12 +115,11 @@ export default function TransactionsPage() {
     },
   });
 
-  // ---- Search / filter
+  // ---- Search
   const [q, setQ] = useState("");
   const filtered = useMemo(() => {
     const qq = safeLower(q).trim();
     if (!qq) return records;
-
     return records.filter((r) => {
       const hay = [
         r.id,
@@ -144,7 +137,18 @@ export default function TransactionsPage() {
     });
   }, [records, q]);
 
-  // ---- Edit dialog state
+  // ---- Totals
+  const totalCredit = useMemo(
+    () => filtered.filter((r) => safeLower(r.tranType) === "credit").reduce((a, r) => a + (r.amount || 0), 0),
+    [filtered]
+  );
+  const totalDebit = useMemo(
+    () => filtered.filter((r) => safeLower(r.tranType) === "debit").reduce((a, r) => a + (r.amount || 0), 0),
+    [filtered]
+  );
+  const net = totalCredit - totalDebit;
+
+  // ---- Edit dialog
   const [editing, setEditing] = useState<DailyRecord | null>(null);
   const [editDraft, setEditDraft] = useState<FinanceDraft | null>(null);
 
@@ -181,15 +185,115 @@ export default function TransactionsPage() {
     });
   }
 
-  const totalCredit = useMemo(
-    () => filtered.filter((r) => safeLower(r.tranType) === "credit").reduce((a, r) => a + (r.amount || 0), 0),
-    [filtered]
-  );
-  const totalDebit = useMemo(
-    () => filtered.filter((r) => safeLower(r.tranType) === "debit").reduce((a, r) => a + (r.amount || 0), 0),
-    [filtered]
-  );
-  const net = totalCredit - totalDebit;
+  // ---- Resizable columns (Transactions table)
+  const columns = useMemo<ColumnDef<DailyRecord>[]>(() => {
+    return [
+      { accessorKey: "id", header: "ID", size: 70 },
+      { accessorKey: "date", header: "Date", size: 110 },
+
+      {
+        id: "amount",
+        header: "Amount",
+        size: 130,
+        cell: ({ row }) => formatINR(row.original.amount),
+      },
+
+      {
+        accessorKey: "category",
+        header: "Category",
+        size: 160,
+        cell: ({ row }) => {
+          const cat = row.original.category;
+          const isLoanLike = LOAN_CATEGORIES.includes(cat as any);
+          return (
+            <Badge variant={isLoanLike ? "secondary" : "outline"}>
+              {cat || "NA"}
+            </Badge>
+          );
+        },
+      },
+
+      { accessorKey: "tranType", header: "Type", size: 90 },
+
+      {
+        accessorKey: "account",
+        header: "Account",
+        size: 140,
+        meta: { className: "hidden lg:table-cell" },
+        cell: ({ row }) => row.original.account,
+      },
+
+      {
+        accessorKey: "description",
+        header: "Description",
+        size: 320,
+        cell: ({ row }) => (
+          <span className="block truncate" title={row.original.description}>
+            {row.original.description}
+          </span>
+        ),
+      },
+
+      {
+        accessorKey: "place",
+        header: "Place / Person",
+        size: 220,
+        cell: ({ row }) => (
+          <span className="block truncate" title={row.original.place}>
+            {row.original.place}
+          </span>
+        ),
+      },
+
+      {
+        accessorKey: "referenceId",
+        header: "Ref",
+        size: 160,
+        meta: { className: "hidden xl:table-cell" },
+        cell: ({ row }) => (
+          <span className="block truncate" title={row.original.referenceId}>
+            {row.original.referenceId}
+          </span>
+        ),
+      },
+
+      {
+        id: "actions",
+        header: "Actions",
+        size: 160,
+        enableResizing: false,
+        cell: ({ row }) => {
+          const r = row.original;
+          return (
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => openEdit(r)}>
+                Edit
+              </Button>
+
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="destructive" size="sm" disabled={deleteMut.isPending}>
+                    Delete
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Delete record #{r.id}?</AlertDialogTitle>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={() => deleteMut.mutate(r.id)}>
+                      Delete
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
+          );
+        },
+      },
+    ];
+  }, [deleteMut.isPending]);
 
   if (isLoading) return <div>Loading…</div>;
   if (error) return <div className="text-destructive">Failed to load Daily records.</div>;
@@ -197,7 +301,7 @@ export default function TransactionsPage() {
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-        <div>
+        <div className="min-w-0">
           <h1 className="text-xl font-semibold">Transactions</h1>
           <p className="text-sm text-muted-foreground">
             Add finance records or loan/lend records. All entries are stored in Google Sheets.
@@ -211,7 +315,7 @@ export default function TransactionsPage() {
       </div>
 
       <Tabs defaultValue="finance" className="w-full">
-        <TabsList>
+        <TabsList className="w-full justify-start overflow-x-auto">
           <TabsTrigger value="finance">Finance Record</TabsTrigger>
           <TabsTrigger value="loan">Loan / Lend</TabsTrigger>
         </TabsList>
@@ -272,7 +376,7 @@ export default function TransactionsPage() {
                 <Input value={finance.referenceId} onChange={(e) => setFinance(s => ({ ...s, referenceId: e.target.value }))} />
               </div>
 
-              <div className="md:col-span-2">
+              <div className="sm:col-span-2">
                 <label className="text-xs text-muted-foreground">Description</label>
                 <Input value={finance.description} onChange={(e) => setFinance(s => ({ ...s, description: e.target.value }))} />
               </div>
@@ -282,7 +386,7 @@ export default function TransactionsPage() {
                 <Input value={finance.place} onChange={(e) => setFinance(s => ({ ...s, place: e.target.value }))} />
               </div>
 
-              <div className="md:col-span-3 flex gap-2">
+              <div className="lg:col-span-3 flex gap-2 flex-wrap">
                 <Button
                   onClick={() => addFinanceMut.mutate()}
                   disabled={addFinanceMut.isPending || finance.amount <= 0}
@@ -313,7 +417,6 @@ export default function TransactionsPage() {
                 <Select
                   value={loan.kind}
                   onValueChange={(v: "Loan" | "Lend") => {
-                    // sensible defaults:
                     const tranType = v === "Loan" ? "Credit" : "Debit";
                     setLoan((s) => ({ ...s, kind: v, tranType }));
                   }}
@@ -362,7 +465,7 @@ export default function TransactionsPage() {
                 </Select>
               </div>
 
-              <div className="md:col-span-2">
+              <div className="sm:col-span-2">
                 <label className="text-xs text-muted-foreground">Description</label>
                 <Input value={loan.description} onChange={(e) => setLoan(s => ({ ...s, description: e.target.value }))} />
               </div>
@@ -372,7 +475,7 @@ export default function TransactionsPage() {
                 <Input value={loan.referenceId} onChange={(e) => setLoan(s => ({ ...s, referenceId: e.target.value }))} />
               </div>
 
-              <div className="md:col-span-3 flex gap-2">
+              <div className="lg:col-span-3 flex gap-2 flex-wrap">
                 <Button
                   onClick={() => addLoanMut.mutate()}
                   disabled={addLoanMut.isPending || loan.amount <= 0 || !loan.person}
@@ -384,8 +487,8 @@ export default function TransactionsPage() {
                 )}
               </div>
 
-              <div className="md:col-span-3 text-xs text-muted-foreground">
-                Note: For Loan/Lend records, the <b>Person</b> is stored in Daily’s <b>Place</b> column (same sheet schema).
+              <div className="lg:col-span-3 text-xs text-muted-foreground">
+                Note: For Loan/Lend records, <b>Person</b> is stored in Daily’s <b>Place</b> column (schema unchanged).
               </div>
             </CardContent>
           </Card>
@@ -409,82 +512,27 @@ export default function TransactionsPage() {
         </CardHeader>
 
         <CardContent>
-          <div className="w-full overflow-x-auto border rounded-md">
-            <div className="min-w-[1100px]">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>ID</TableHead>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Amount</TableHead>
-                    <TableHead>Category</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Account</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead>{/* Place/Person */}Place / Person</TableHead>
-                    <TableHead>Ref</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-
-                <TableBody>
-                  {filtered.map((r) => (
-                    <TableRow key={r.id}>
-                      <TableCell>{r.id}</TableCell>
-                      <TableCell>{r.date}</TableCell>
-                      <TableCell>{formatINR(r.amount)}</TableCell>
-                      <TableCell>
-                        <Badge variant={LOAN_CATEGORIES.includes(r.category as any) ? "secondary" : "outline"}>
-                          {r.category}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>{r.tranType}</TableCell>
-                      <TableCell>{r.account}</TableCell>
-                      <TableCell className="max-w-[180px] sm:max-w-[260px] truncate">{r.description}</TableCell>
-                      <TableCell className="max-w-[140px] sm:max-w-[200px] truncate">{r.place}</TableCell>
-                      <TableCell className="max-w-[120px] truncate">{r.referenceId}</TableCell>
-                      <TableCell className="text-right space-x-2">
-                        <Button variant="outline" size="sm" onClick={() => openEdit(r)}>
-                          Edit
-                        </Button>
-
-                        <AlertDialog>
-                          <AlertDialogTrigger asChild>
-                            <Button variant="destructive" size="sm" disabled={deleteMut.isPending}>
-                              Delete
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Delete record #{r.id}?</AlertDialogTitle>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel>Cancel</AlertDialogCancel>
-                              <AlertDialogAction onClick={() => deleteMut.mutate(r.id)}>
-                                Delete
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-
-                  {filtered.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={10} className="text-center text-muted-foreground">
-                        No records match the search.
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
+          <ResizableDataTable
+            data={filtered}
+            columns={columns}
+            storageKey="daily-table-widths"
+            getRowId={(r) => String(r.id)}
+          />
+          <div className="mt-2 text-xs text-muted-foreground">
+            Tip: Drag the right edge of any column header to resize. Widths are saved in your browser.
           </div>
         </CardContent>
       </Card>
 
-      <Dialog open={!!editing} onOpenChange={(v) => { if (!v) { setEditing(null); setEditDraft(null); } }}>
+      <Dialog
+        open={!!editing}
+        onOpenChange={(v) => {
+          if (!v) {
+            setEditing(null);
+            setEditDraft(null);
+          }
+        }}
+      >
         <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle>Edit Daily Record</DialogTitle>
@@ -494,25 +542,36 @@ export default function TransactionsPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
                 <label className="text-xs text-muted-foreground">Date</label>
-                <Input type="date" value={editDraft.date} onChange={(e) => setEditDraft(s => s ? ({ ...s, date: e.target.value }) : s)} />
+                <Input
+                  type="date"
+                  value={editDraft.date}
+                  onChange={(e) => setEditDraft(s => (s ? ({ ...s, date: e.target.value }) : s))}
+                />
               </div>
 
               <div>
                 <label className="text-xs text-muted-foreground">Amount</label>
-                <Input type="number" value={editDraft.amount} onChange={(e) => setEditDraft(s => s ? ({ ...s, amount: Number(e.target.value) }) : s)} />
+                <Input
+                  type="number"
+                  value={editDraft.amount}
+                  onChange={(e) => setEditDraft(s => (s ? ({ ...s, amount: Number(e.target.value) }) : s))}
+                />
               </div>
 
               <div>
                 <label className="text-xs text-muted-foreground">Category</label>
-                <Input value={editDraft.category} onChange={(e) => setEditDraft(s => s ? ({ ...s, category: e.target.value }) : s)} />
-                <div className="text-[11px] text-muted-foreground mt-1">
-                  Tip: keep consistent categories for dashboards.
-                </div>
+                <Input
+                  value={editDraft.category}
+                  onChange={(e) => setEditDraft(s => (s ? ({ ...s, category: e.target.value }) : s))}
+                />
               </div>
 
               <div>
                 <label className="text-xs text-muted-foreground">Tran Type</label>
-                <Select value={editDraft.tranType} onValueChange={(v) => setEditDraft(s => s ? ({ ...s, tranType: v }) : s)}>
+                <Select
+                  value={editDraft.tranType}
+                  onValueChange={(v) => setEditDraft(s => (s ? ({ ...s, tranType: v }) : s))}
+                >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {TRAN_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
@@ -522,7 +581,10 @@ export default function TransactionsPage() {
 
               <div>
                 <label className="text-xs text-muted-foreground">Account</label>
-                <Select value={editDraft.account} onValueChange={(v) => setEditDraft(s => s ? ({ ...s, account: v }) : s)}>
+                <Select
+                  value={editDraft.account}
+                  onValueChange={(v) => setEditDraft(s => (s ? ({ ...s, account: v }) : s))}
+                >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {ACCOUNTS.map((a) => <SelectItem key={a} value={a}>{a}</SelectItem>)}
@@ -534,17 +596,26 @@ export default function TransactionsPage() {
                 <label className="text-xs text-muted-foreground">
                   {DAILY_PERSON_LIKE_CATEGORIES.has(editDraft.category) ? "Person (stored in Place column)" : "Place"}
                 </label>
-                <Input value={editDraft.place} onChange={(e) => setEditDraft(s => s ? ({ ...s, place: e.target.value }) : s)} />
+                <Input
+                  value={editDraft.place}
+                  onChange={(e) => setEditDraft(s => (s ? ({ ...s, place: e.target.value }) : s))}
+                />
               </div>
 
               <div className="md:col-span-2">
                 <label className="text-xs text-muted-foreground">Description</label>
-                <Input value={editDraft.description} onChange={(e) => setEditDraft(s => s ? ({ ...s, description: e.target.value }) : s)} />
+                <Input
+                  value={editDraft.description}
+                  onChange={(e) => setEditDraft(s => (s ? ({ ...s, description: e.target.value }) : s))}
+                />
               </div>
 
               <div className="md:col-span-2">
                 <label className="text-xs text-muted-foreground">Reference Id</label>
-                <Input value={editDraft.referenceId} onChange={(e) => setEditDraft(s => s ? ({ ...s, referenceId: e.target.value }) : s)} />
+                <Input
+                  value={editDraft.referenceId}
+                  onChange={(e) => setEditDraft(s => (s ? ({ ...s, referenceId: e.target.value }) : s))}
+                />
               </div>
             </div>
           )}
