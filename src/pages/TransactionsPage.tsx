@@ -607,8 +607,7 @@ export default function TransactionsPage() {
                 value={month}
                 onChange={(e) => setMonth(e.target.value)}
               />
-              <div className="text-[11px] text-muted-foreground mt-1">
-              </div>
+              <div className="text-[11px] text-muted-foreground mt-1"/>
             </div>
 
             <div className="lg:col-span-2">
