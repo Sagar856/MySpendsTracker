@@ -1,11 +1,13 @@
 import netlifyIdentity from "netlify-identity-widget";
 
 export function initIdentity() {
-  netlifyIdentity.init();
+  netlifyIdentity.init({
+    APIUrl: "/.netlify/identity",
+  });
 }
 
 export function openLogin() {
-  // force login view (no signup tab by default)
+  // forces login view
   netlifyIdentity.open("login");
 }
 
@@ -31,7 +33,3 @@ export function onLogin(cb: (user: any) => void) {
 export function onLogout(cb: () => void) {
   netlifyIdentity.on("logout", cb);
 }
-
-netlifyIdentity.init({
-  APIUrl: "/.netlify/identity",
-});
