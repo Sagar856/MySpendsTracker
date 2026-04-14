@@ -438,7 +438,7 @@ export default function TransactionsPage() {
 
               <div>
                 <label className="text-xs text-muted-foreground">Amount</label>
-                <Input type="number" value={finance.amount} onChange={(e) => setFinance(s => ({ ...s, amount: Number(e.target.value) }))} />
+                <Input type="number" min={0} value={finance.amount} onChange={(e) => setFinance(s => ({ ...s, amount: Number(e.target.value) }))} />
               </div>
 
               <div>
@@ -550,7 +550,7 @@ export default function TransactionsPage() {
 
               <div>
                 <label className="text-xs text-muted-foreground">Amount</label>
-                <Input type="number" value={loan.amount} onChange={(e) => setLoan(s => ({ ...s, amount: Number(e.target.value) }))} />
+                <Input type="number" min={0} value={loan.amount} onChange={(e) => setLoan(s => ({ ...s, amount: Number(e.target.value) }))} />
               </div>
 
               <div>
