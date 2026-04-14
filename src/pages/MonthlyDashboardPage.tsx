@@ -350,7 +350,7 @@ export default function MonthlyDashboardPage() {
 
             <div className="lg:col-span-4">
               <label className="text-xs text-muted-foreground">Category</label>
-              <Select value={budgetCategory} onValueChange={setBudgetCategory}>
+              <Select value={budgetCategory} onValueChange={setBudgetCategory} disabled={!!editingBudgetId}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {allCategoryOptions.map((c) => (
@@ -364,7 +364,8 @@ export default function MonthlyDashboardPage() {
               <label className="text-xs text-muted-foreground">Budget Amount</label>
               <Input
                 type="number"
-                min={0}
+                min={1}
+                step={1}
                 value={budgetAmount}
                 onChange={(e) => setBudgetAmount(Number(e.target.value))}
               />
@@ -374,7 +375,12 @@ export default function MonthlyDashboardPage() {
               <Button
                 className="w-full"
                 onClick={() => upsertMut.mutate()}
-                disabled={!budgetMonth || !budgetCategory || upsertMut.isPending}
+                disabled={
+                  !budgetMonth ||
+                  !budgetCategory ||
+                  upsertMut.isPending ||
+                  Number(budgetAmount) <= 0
+                }
               >
                 {upsertMut.isPending ? "Saving…" : editingBudgetId ? "Update" : "Save"}
               </Button>
