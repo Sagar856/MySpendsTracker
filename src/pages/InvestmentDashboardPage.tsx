@@ -1,13 +1,26 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { listDaily } from "../api/daily";
-import { INVESTMENT_CATEGORIES } from "../lib/constants";
+import { listCategories } from "../api/categories";
+import { FALLBACK_INVESTMENT_CATEGORIES } from "../lib/constants";
 import { formatINR, safeLower } from "../lib/format";
+
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { BarChart, Bar, ResponsiveContainer, Tooltip, XAxis, YAxis, PieChart, Pie, Cell, Legend } from "recharts";
+import {
+  BarChart,
+  Bar,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+  PieChart,
+  Pie,
+  Cell,
+  Legend,
+} from "recharts";
 
 const COLORS = ["#7ccf00", "#9ae600", "#bbf451", "#5ea500", "#497d00", "#3c6300"];
 
@@ -19,18 +32,30 @@ function parseMMDDYYYY(s: string) {
 }
 
 export default function InvestmentDashboardPage() {
-  const { data, isLoading } = useQuery({ queryKey: ["daily"], queryFn: listDaily });
-  const all = data?.records ?? [];
+  const dailyQ = useQuery({ queryKey: ["daily"], queryFn: listDaily });
+  const categoriesQ = useQuery({ queryKey: ["categories"], queryFn: listCategories });
 
-  const records = useMemo(
-    () => all.filter((r) => INVESTMENT_CATEGORIES.includes(r.category as any)),
-    [all]
-  );
+  const all = dailyQ.data?.records ?? [];
+  const categoryConfig = categoriesQ.data?.records ?? [];
 
-  const categories = ["All", ...INVESTMENT_CATEGORIES];
+  const investmentCategories = useMemo(() => {
+    const fromCfg = categoryConfig
+      .filter((c) => c.active && c.type === "Investment")
+      .sort((a, b) => (a.sortOrder - b.sortOrder) || a.category.localeCompare(b.category))
+      .map((c) => c.category);
+
+    return fromCfg.length ? fromCfg : [...FALLBACK_INVESTMENT_CATEGORIES];
+  }, [categoryConfig]);
+
+  const records = useMemo(() => {
+    const set = new Set(investmentCategories);
+    return all.filter((r) => set.has(r.category));
+  }, [all, investmentCategories]);
+
+  const categories = ["All", ...investmentCategories];
 
   const tranTypes = useMemo(() => {
-    const set = new Set(records.map(r => r.tranType).filter(Boolean));
+    const set = new Set(records.map((r) => r.tranType).filter(Boolean));
     return ["All", ...Array.from(set).sort()];
   }, [records]);
 
@@ -67,7 +92,9 @@ export default function InvestmentDashboardPage() {
     for (const r of filtered) {
       map.set(r.category || "NA", (map.get(r.category || "NA") || 0) + (r.amount || 0));
     }
-    return Array.from(map.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
+    return Array.from(map.entries())
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
   }, [filtered]);
 
   const tranCounts = useMemo(() => {
@@ -79,13 +106,16 @@ export default function InvestmentDashboardPage() {
     return Array.from(map.entries()).map(([name, value]) => ({ name, value }));
   }, [filtered]);
 
-  if (isLoading) return <div>Loading…</div>;
+  if (dailyQ.isLoading) return <div>Loading…</div>;
+  if (dailyQ.isError) return <div className="text-destructive">Failed to load Daily data.</div>;
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-xl font-semibold">Investment Dashboard</h1>
-        <p className="text-sm text-muted-foreground">Based on Inv_SIP, Inv_Stocks, Inv_Others categories.</p>
+        <p className="text-sm text-muted-foreground">
+          Uses categories of type <b>Investment</b> from Settings → Categories (fallbacks used if not configured).
+        </p>
       </div>
 
       <Card>
@@ -139,7 +169,7 @@ export default function InvestmentDashboardPage() {
                 <XAxis dataKey="name" />
                 <YAxis />
                 <Tooltip formatter={(v: any) => formatINR(Number(v))} />
-                <Bar dataKey="value" fill="#16a34a" radius={[6, 6, 0, 0]} />
+                <Bar dataKey="value" fill="#7ccf00" radius={[6, 6, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </CardContent>
