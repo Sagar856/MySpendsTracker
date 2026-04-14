@@ -33,14 +33,16 @@ import ResizableDataTable from "@/components/ResizableDataTable";
 
 import { addDaily, deleteDaily, listDaily, updateDaily, type DailyRecord } from "../api/daily";
 import { addLoanTransaction } from "../api/loans";
+import { listCategories } from "../api/categories";
+
 import {
   ACCOUNTS,
-  FINANCE_CATEGORIES,
-  LOAN_CATEGORIES,
   TRAN_TYPES,
   DAILY_PERSON_LIKE_CATEGORIES,
-  INVESTMENT_CATEGORIES,
+  FALLBACK_INVESTMENT_CATEGORIES,
+  FALLBACK_LOAN_CATEGORIES,
 } from "../lib/constants";
+
 import { formatINR, mmddyyyyToISO, safeLower } from "../lib/format";
 
 type FinanceDraft = {
@@ -76,17 +78,40 @@ function yearMonthFromDailyDate(mmddyyyy: string) {
 
 export default function TransactionsPage() {
   const qc = useQueryClient();
-  const { data, isLoading, error } = useQuery({
-    queryKey: ["daily"],
-    queryFn: listDaily,
-  });
 
-  const records = data?.records ?? [];
+  const dailyQ = useQuery({ queryKey: ["daily"], queryFn: listDaily });
+  const categoriesQ = useQuery({ queryKey: ["categories"], queryFn: listCategories });
+
+  const records = dailyQ.data?.records ?? [];
+  const categoryConfig = categoriesQ.data?.records ?? [];
+
+  const activeCategories = useMemo(() => categoryConfig.filter(c => c.active), [categoryConfig]);
+
+  const investmentCategorySet = useMemo(() => {
+    const fromCfg = activeCategories.filter(c => c.type === "Investment").map(c => c.category);
+    const list = fromCfg.length ? fromCfg : [...FALLBACK_INVESTMENT_CATEGORIES];
+    return new Set(list);
+  }, [activeCategories]);
+
+  const loanCategorySet = useMemo(() => {
+    const fromCfg = activeCategories.filter(c => c.type === "Loan").map(c => c.category);
+    const list = fromCfg.length ? fromCfg : [...FALLBACK_LOAN_CATEGORIES];
+    return new Set(list);
+  }, [activeCategories]);
+
+  const financeCategories = useMemo(() => {
+    // Finance tab excludes Loan type
+    const fromCfg = activeCategories.filter(c => c.type !== "Loan").map(c => c.category);
+    // fallback: use categories seen in data if config empty
+    const fromData = Array.from(new Set(records.map(r => r.category).filter(Boolean))).sort();
+    const list = fromCfg.length ? fromCfg : fromData;
+    return list.length ? list : ["NA"];
+  }, [activeCategories, records]);
 
   // ---- Add Finance
   const [finance, setFinance] = useState<FinanceDraft>({
     date: todayISO,
-    category: FINANCE_CATEGORIES[0],
+    category: financeCategories[0] || "NA",
     amount: 0,
     tranType: "Debit",
     account: "UPI",
@@ -94,6 +119,14 @@ export default function TransactionsPage() {
     place: "",
     referenceId: "NA",
   });
+
+  // when categories load, ensure selected category is valid
+  useMemo(() => {
+    if (!finance.category && financeCategories.length) {
+      setFinance(s => ({ ...s, category: financeCategories[0] }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [financeCategories.join("|")]);
 
   const addFinanceMut = useMutation({
     mutationFn: () => addDaily(finance),
@@ -124,10 +157,10 @@ export default function TransactionsPage() {
   });
 
   // ---- Quick Filters
-  const [month, setMonth] = useState<string>(currentMonth); // set "" for all
+  const [month, setMonth] = useState<string>(currentMonth);
   const [categoryFilter, setCategoryFilter] = useState<string>("All");
   const [accountFilter, setAccountFilter] = useState<string>("All");
-  const [typeFilter, setTypeFilter] = useState<string>("All"); // Credit/Debit/All
+  const [typeFilter, setTypeFilter] = useState<string>("All");
 
   const [onlyInvestments, setOnlyInvestments] = useState(false);
   const [onlyLoans, setOnlyLoans] = useState(false);
@@ -136,9 +169,11 @@ export default function TransactionsPage() {
   const [q, setQ] = useState("");
 
   const categoryOptions = useMemo(() => {
-    const set = new Set(records.map((r) => r.category).filter(Boolean));
+    const set = new Set<string>();
+    for (const c of activeCategories) set.add(c.category);
+    for (const r of records) if (r.category) set.add(r.category);
     return ["All", ...Array.from(set).sort()];
-  }, [records]);
+  }, [activeCategories, records]);
 
   const accountOptions = useMemo(() => {
     const set = new Set(records.map((r) => r.account).filter(Boolean));
@@ -150,35 +185,15 @@ export default function TransactionsPage() {
   const filtered = useMemo(() => {
     let rows = [...records];
 
-    // Month filter
-    if (month) {
-      rows = rows.filter((r) => yearMonthFromDailyDate(r.date) === month);
-    }
+    if (month) rows = rows.filter((r) => yearMonthFromDailyDate(r.date) === month);
 
-    // Only investments / only loans (mutually exclusive)
-    if (onlyInvestments) {
-      rows = rows.filter((r) => INVESTMENT_CATEGORIES.includes(r.category as any));
-    }
-    if (onlyLoans) {
-      rows = rows.filter((r) => LOAN_CATEGORIES.includes(r.category as any));
-    }
+    if (onlyInvestments) rows = rows.filter((r) => investmentCategorySet.has(r.category));
+    if (onlyLoans) rows = rows.filter((r) => loanCategorySet.has(r.category));
 
-    // Category
-    if (categoryFilter !== "All") {
-      rows = rows.filter((r) => r.category === categoryFilter);
-    }
+    if (categoryFilter !== "All") rows = rows.filter((r) => r.category === categoryFilter);
+    if (accountFilter !== "All") rows = rows.filter((r) => r.account === accountFilter);
+    if (typeFilter !== "All") rows = rows.filter((r) => safeLower(r.tranType) === safeLower(typeFilter));
 
-    // Account
-    if (accountFilter !== "All") {
-      rows = rows.filter((r) => r.account === accountFilter);
-    }
-
-    // Credit/Debit
-    if (typeFilter !== "All") {
-      rows = rows.filter((r) => safeLower(r.tranType) === safeLower(typeFilter));
-    }
-
-    // Search (applies after filters)
     const qq = safeLower(q).trim();
     if (qq) {
       rows = rows.filter((r) => {
@@ -191,13 +206,10 @@ export default function TransactionsPage() {
           r.description,
           r.place,
           r.referenceId,
-        ]
-          .map((x) => safeLower(x))
-          .join(" | ");
+        ].map((x) => safeLower(x)).join(" | ");
         return hay.includes(qq);
       });
     }
-
     return rows;
   }, [
     records,
@@ -208,27 +220,22 @@ export default function TransactionsPage() {
     accountFilter,
     typeFilter,
     q,
+    investmentCategorySet,
+    loanCategorySet,
   ]);
 
-  // ---- Totals on filtered
   const totalCredit = useMemo(
-    () =>
-      filtered
-        .filter((r) => safeLower(r.tranType) === "credit")
-        .reduce((a, r) => a + (r.amount || 0), 0),
+    () => filtered.filter((r) => safeLower(r.tranType) === "credit").reduce((a, r) => a + (r.amount || 0), 0),
     [filtered]
   );
   const totalDebit = useMemo(
-    () =>
-      filtered
-        .filter((r) => safeLower(r.tranType) === "debit")
-        .reduce((a, r) => a + (r.amount || 0), 0),
+    () => filtered.filter((r) => safeLower(r.tranType) === "debit").reduce((a, r) => a + (r.amount || 0), 0),
     [filtered]
   );
   const net = totalCredit - totalDebit;
 
   function clearFilters() {
-    setMonth(""); // show all months
+    setMonth("");
     setCategoryFilter("All");
     setAccountFilter("All");
     setTypeFilter("All");
@@ -274,45 +281,28 @@ export default function TransactionsPage() {
     });
   }
 
-  // ---- Resizable columns (Transactions table)
   const columns = useMemo<ColumnDef<DailyRecord>[]>(() => {
     return [
       { accessorKey: "id", header: "ID", size: 70 },
       { accessorKey: "date", header: "Date", size: 110 },
-
-      {
-        id: "amount",
-        header: "Amount",
-        size: 130,
-        cell: ({ row }) => formatINR(row.original.amount),
-      },
-
+      { id: "amount", header: "Amount", size: 130, cell: ({ row }) => formatINR(row.original.amount) },
       {
         accessorKey: "category",
         header: "Category",
         size: 170,
         cell: ({ row }) => {
           const cat = row.original.category;
-          const isLoanLike = LOAN_CATEGORIES.includes(cat as any);
-          const isInv = INVESTMENT_CATEGORIES.includes(cat as any);
+          const isLoan = loanCategorySet.has(cat);
+          const isInv = investmentCategorySet.has(cat);
           return (
-            <Badge variant={isLoanLike ? "secondary" : isInv ? "default" : "outline"}>
+            <Badge variant={isLoan ? "secondary" : isInv ? "default" : "outline"}>
               {cat || "NA"}
             </Badge>
           );
         },
       },
-
       { accessorKey: "tranType", header: "Type", size: 90 },
-
-      {
-        accessorKey: "account",
-        header: "Account",
-        size: 140,
-        meta: { className: "hidden lg:table-cell" },
-        cell: ({ row }) => row.original.account,
-      },
-
+      { accessorKey: "account", header: "Account", size: 140, meta: { className: "hidden lg:table-cell" } },
       {
         accessorKey: "description",
         header: "Description",
@@ -323,7 +313,6 @@ export default function TransactionsPage() {
           </span>
         ),
       },
-
       {
         accessorKey: "place",
         header: "Place / Person",
@@ -334,19 +323,7 @@ export default function TransactionsPage() {
           </span>
         ),
       },
-
-      {
-        accessorKey: "referenceId",
-        header: "Ref",
-        size: 160,
-        meta: { className: "hidden xl:table-cell" },
-        cell: ({ row }) => (
-          <span className="block truncate" title={row.original.referenceId}>
-            {row.original.referenceId}
-          </span>
-        ),
-      },
-
+      { accessorKey: "referenceId", header: "Ref", size: 160, meta: { className: "hidden xl:table-cell" } },
       {
         id: "actions",
         header: "Actions",
@@ -356,15 +333,10 @@ export default function TransactionsPage() {
           const r = row.original;
           return (
             <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => openEdit(r)}>
-                Edit
-              </Button>
-
+              <Button variant="outline" size="sm" onClick={() => openEdit(r)}>Edit</Button>
               <AlertDialog>
                 <AlertDialogTrigger asChild>
-                  <Button variant="destructive" size="sm" disabled={deleteMut.isPending}>
-                    Delete
-                  </Button>
+                  <Button variant="destructive" size="sm" disabled={deleteMut.isPending}>Delete</Button>
                 </AlertDialogTrigger>
                 <AlertDialogContent>
                   <AlertDialogHeader>
@@ -372,9 +344,7 @@ export default function TransactionsPage() {
                   </AlertDialogHeader>
                   <AlertDialogFooter>
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction onClick={() => deleteMut.mutate(r.id)}>
-                      Delete
-                    </AlertDialogAction>
+                    <AlertDialogAction onClick={() => deleteMut.mutate(r.id)}>Delete</AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>
               </AlertDialog>
@@ -383,10 +353,10 @@ export default function TransactionsPage() {
         },
       },
     ];
-  }, [deleteMut.isPending]);
+  }, [deleteMut.isPending, loanCategorySet, investmentCategorySet]);
 
-  if (isLoading) return <div>Loading…</div>;
-  if (error) return <div className="text-destructive">Failed to load Daily records.</div>;
+  if (dailyQ.isLoading) return <div>Loading…</div>;
+  if (dailyQ.isError) return <div className="text-destructive">Failed to load Daily records.</div>;
 
   return (
     <div className="space-y-6">
@@ -394,7 +364,7 @@ export default function TransactionsPage() {
         <div className="min-w-0">
           <h1 className="text-xl font-semibold">Transactions</h1>
           <p className="text-sm text-muted-foreground">
-            Add finance records or loan/lend records. Filters apply to the Daily table below.
+            Categories come from Settings → Categories (Config_Categories sheet).
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -412,9 +382,7 @@ export default function TransactionsPage() {
 
         <TabsContent value="finance" className="mt-4">
           <Card>
-            <CardHeader>
-              <CardTitle>Add Finance Record</CardTitle>
-            </CardHeader>
+            <CardHeader><CardTitle>Add Finance Record</CardTitle></CardHeader>
             <CardContent className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <div>
                 <label className="text-xs text-muted-foreground">Date</label>
@@ -426,19 +394,19 @@ export default function TransactionsPage() {
                 <Select value={finance.category} onValueChange={(v) => setFinance(s => ({ ...s, category: v }))}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {FINANCE_CATEGORIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                    {financeCategories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
                   </SelectContent>
                 </Select>
+                {categoriesQ.isError && (
+                  <div className="text-[11px] text-destructive mt-1">
+                    Config_Categories not found. Add it to enable managed categories.
+                  </div>
+                )}
               </div>
 
               <div>
                 <label className="text-xs text-muted-foreground">Amount</label>
-                <Input
-                  type="number"
-                  value={finance.amount}
-                  onChange={(e) => setFinance(s => ({ ...s, amount: Number(e.target.value) }))}
-                  min={0}
-                />
+                <Input type="number" value={finance.amount} min={0} onChange={(e) => setFinance(s => ({ ...s, amount: Number(e.target.value) }))} />
               </div>
 
               <div>
@@ -477,15 +445,9 @@ export default function TransactionsPage() {
               </div>
 
               <div className="lg:col-span-3 flex gap-2 flex-wrap">
-                <Button
-                  onClick={() => addFinanceMut.mutate()}
-                  disabled={addFinanceMut.isPending || finance.amount <= 0}
-                >
+                <Button onClick={() => addFinanceMut.mutate()} disabled={addFinanceMut.isPending || finance.amount <= 0}>
                   {addFinanceMut.isPending ? "Adding…" : "Add Finance Record"}
                 </Button>
-                {addFinanceMut.isError && (
-                  <span className="text-sm text-destructive">Failed: {(addFinanceMut.error as any)?.message}</span>
-                )}
               </div>
             </CardContent>
           </Card>
@@ -493,9 +455,7 @@ export default function TransactionsPage() {
 
         <TabsContent value="loan" className="mt-4">
           <Card>
-            <CardHeader>
-              <CardTitle>Add Loan / Lend Record</CardTitle>
-            </CardHeader>
+            <CardHeader><CardTitle>Add Loan / Lend Record</CardTitle></CardHeader>
             <CardContent className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <div>
                 <label className="text-xs text-muted-foreground">Date</label>
@@ -526,12 +486,7 @@ export default function TransactionsPage() {
 
               <div>
                 <label className="text-xs text-muted-foreground">Amount</label>
-                <Input
-                  type="number"
-                  value={loan.amount}
-                  onChange={(e) => setLoan(s => ({ ...s, amount: Number(e.target.value) }))}
-                  min={0}
-                />
+                <Input type="number" value={loan.amount} min={0} onChange={(e) => setLoan(s => ({ ...s, amount: Number(e.target.value) }))} />
               </div>
 
               <div>
@@ -566,19 +521,13 @@ export default function TransactionsPage() {
               </div>
 
               <div className="lg:col-span-3 flex gap-2 flex-wrap">
-                <Button
-                  onClick={() => addLoanMut.mutate()}
-                  disabled={addLoanMut.isPending || loan.amount <= 0 || !loan.person}
-                >
+                <Button onClick={() => addLoanMut.mutate()} disabled={addLoanMut.isPending || loan.amount <= 0 || !loan.person}>
                   {addLoanMut.isPending ? "Adding…" : "Add Loan/Lend (Daily + Loans)"}
                 </Button>
-                {addLoanMut.isError && (
-                  <span className="text-sm text-destructive">Failed: {(addLoanMut.error as any)?.message}</span>
-                )}
               </div>
 
               <div className="lg:col-span-3 text-xs text-muted-foreground">
-                Note: For Loan/Lend records, <b>Person</b> is stored in Daily’s <b>Place</b> column (schema unchanged).
+                Note: For Loan/Lend records, <b>Person</b> is stored in Daily’s <b>Place</b> column.
               </div>
             </CardContent>
           </Card>
@@ -589,25 +538,15 @@ export default function TransactionsPage() {
         <CardHeader className="gap-2">
           <CardTitle>All Daily Records</CardTitle>
 
-          {/* Filters row */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-2 items-end">
             <div className="lg:col-span-4">
               <label className="text-xs text-muted-foreground">Search</label>
-              <Input
-                placeholder="Search description, place/person, id, category…"
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-              />
+              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" />
             </div>
 
-            <div className="sm:col-span-2">
+            <div className="lg:col-span-2">
               <label className="text-xs text-muted-foreground">Month</label>
-              <Input
-                type="month"
-                value={month}
-                onChange={(e) => setMonth(e.target.value)}
-              />
-              <div className="text-[11px] text-muted-foreground mt-1"/>
+              <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
             </div>
 
             <div className="lg:col-span-2">
@@ -645,7 +584,7 @@ export default function TransactionsPage() {
                 size="sm"
                 variant={onlyInvestments ? "default" : "outline"}
                 onClick={() => {
-                  setOnlyInvestments((v) => {
+                  setOnlyInvestments(v => {
                     const next = !v;
                     if (next) setOnlyLoans(false);
                     return next;
@@ -659,7 +598,7 @@ export default function TransactionsPage() {
                 size="sm"
                 variant={onlyLoans ? "default" : "outline"}
                 onClick={() => {
-                  setOnlyLoans((v) => {
+                  setOnlyLoans(v => {
                     const next = !v;
                     if (next) setOnlyInvestments(false);
                     return next;
@@ -678,137 +617,76 @@ export default function TransactionsPage() {
               </div>
             </div>
           </div>
-
-          {/* Active filter chips */}
-          <div className="flex flex-wrap gap-2 pt-2">
-            {month && <Badge variant="outline">Month: {month}</Badge>}
-            {categoryFilter !== "All" && <Badge variant="outline">Category: {categoryFilter}</Badge>}
-            {accountFilter !== "All" && <Badge variant="outline">Account: {accountFilter}</Badge>}
-            {typeFilter !== "All" && <Badge variant="outline">Type: {typeFilter}</Badge>}
-            {onlyInvestments && <Badge variant="outline">Investments only</Badge>}
-            {onlyLoans && <Badge variant="outline">Loans/Lends only</Badge>}
-          </div>
         </CardHeader>
 
         <CardContent>
           <ResizableDataTable
             data={filtered}
             columns={columns}
-            storageKey="loans-table-widths"
+            storageKey="daily-table-widths"
             getRowId={(r) => String(r.id)}
             maxHeight="65vh"
           />
           <div className="mt-2 text-xs text-muted-foreground">
-            Tip: Drag the right edge of a column header to resize. Long text is trimmed; hover to see full value.
+            Drag column edges to resize. Long text is trimmed; hover to see full value.
           </div>
         </CardContent>
       </Card>
 
       {/* Edit dialog */}
-      <Dialog
-        open={!!editing}
-        onOpenChange={(v) => {
-          if (!v) {
-            setEditing(null);
-            setEditDraft(null);
-          }
-        }}
-      >
+      <Dialog open={!!editing} onOpenChange={(v) => { if (!v) { setEditing(null); setEditDraft(null); } }}>
         <DialogContent className="max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Edit Daily Record</DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>Edit Daily Record</DialogTitle></DialogHeader>
 
           {editing && editDraft && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
                 <label className="text-xs text-muted-foreground">Date</label>
-                <Input
-                  type="date"
-                  value={editDraft.date}
-                  onChange={(e) => setEditDraft(s => (s ? ({ ...s, date: e.target.value }) : s))}
-                />
+                <Input type="date" value={editDraft.date} onChange={(e) => setEditDraft(s => s ? ({ ...s, date: e.target.value }) : s)} />
               </div>
 
               <div>
                 <label className="text-xs text-muted-foreground">Amount</label>
-                <Input
-                  type="number"
-                  value={editDraft.amount}
-                  onChange={(e) => setEditDraft(s => (s ? ({ ...s, amount: Number(e.target.value) }) : s))}
-                />
+                <Input type="number" value={editDraft.amount} onChange={(e) => setEditDraft(s => s ? ({ ...s, amount: Number(e.target.value) }) : s)} />
               </div>
 
               <div>
                 <label className="text-xs text-muted-foreground">Category</label>
-                <Input
-                  value={editDraft.category}
-                  onChange={(e) => setEditDraft(s => (s ? ({ ...s, category: e.target.value }) : s))}
-                />
+                <Input value={editDraft.category} onChange={(e) => setEditDraft(s => s ? ({ ...s, category: e.target.value }) : s)} />
               </div>
 
               <div>
                 <label className="text-xs text-muted-foreground">Tran Type</label>
-                <Select
-                  value={editDraft.tranType}
-                  onValueChange={(v) => setEditDraft(s => (s ? ({ ...s, tranType: v }) : s))}
-                >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {TRAN_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <Input value={editDraft.tranType} onChange={(e) => setEditDraft(s => s ? ({ ...s, tranType: e.target.value }) : s)} />
               </div>
 
               <div>
                 <label className="text-xs text-muted-foreground">Account</label>
-                <Select
-                  value={editDraft.account}
-                  onValueChange={(v) => setEditDraft(s => (s ? ({ ...s, account: v }) : s))}
-                >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {ACCOUNTS.map((a) => <SelectItem key={a} value={a}>{a}</SelectItem>)}
-                  </SelectContent>
-                </Select>
+                <Input value={editDraft.account} onChange={(e) => setEditDraft(s => s ? ({ ...s, account: e.target.value }) : s)} />
               </div>
 
               <div>
                 <label className="text-xs text-muted-foreground">
                   {DAILY_PERSON_LIKE_CATEGORIES.has(editDraft.category) ? "Person (stored in Place column)" : "Place"}
                 </label>
-                <Input
-                  value={editDraft.place}
-                  onChange={(e) => setEditDraft(s => (s ? ({ ...s, place: e.target.value }) : s))}
-                />
+                <Input value={editDraft.place} onChange={(e) => setEditDraft(s => s ? ({ ...s, place: e.target.value }) : s)} />
               </div>
 
               <div className="md:col-span-2">
                 <label className="text-xs text-muted-foreground">Description</label>
-                <Input
-                  value={editDraft.description}
-                  onChange={(e) => setEditDraft(s => (s ? ({ ...s, description: e.target.value }) : s))}
-                />
+                <Input value={editDraft.description} onChange={(e) => setEditDraft(s => s ? ({ ...s, description: e.target.value }) : s)} />
               </div>
 
               <div className="md:col-span-2">
                 <label className="text-xs text-muted-foreground">Reference Id</label>
-                <Input
-                  value={editDraft.referenceId}
-                  onChange={(e) => setEditDraft(s => (s ? ({ ...s, referenceId: e.target.value }) : s))}
-                />
+                <Input value={editDraft.referenceId} onChange={(e) => setEditDraft(s => s ? ({ ...s, referenceId: e.target.value }) : s)} />
               </div>
             </div>
           )}
 
           <DialogFooter className="mt-4">
-            <Button variant="outline" onClick={() => { setEditing(null); setEditDraft(null); }}>
-              Cancel
-            </Button>
-            <Button
-              onClick={() => updateMut.mutate()}
-              disabled={updateMut.isPending || !editDraft || (editDraft.amount ?? 0) <= 0}
-            >
+            <Button variant="outline" onClick={() => { setEditing(null); setEditDraft(null); }}>Cancel</Button>
+            <Button onClick={() => updateMut.mutate()} disabled={updateMut.isPending || !editDraft || (editDraft.amount ?? 0) <= 0}>
               {updateMut.isPending ? "Saving…" : "Save"}
             </Button>
           </DialogFooter>

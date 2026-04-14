@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { listCategories } from "../api/categories";
 
 import {
   BarChart,
@@ -22,6 +23,18 @@ import {
   Cell,
   Legend,
 } from "recharts";
+
+
+
+const categoriesQ = useQuery({ queryKey: ["categories"], queryFn: listCategories });
+const activeExpenseCategories = useMemo(() => {
+  const rows = categoriesQ.data?.records ?? [];
+  return rows
+    .filter((c) => c.active && c.type === "Expense")
+    .sort((a, b) => (a.sortOrder - b.sortOrder) || a.category.localeCompare(b.category))
+    .map((c) => c.category);
+}, [categoriesQ.data]);
+
 
 const COLORS = ["#7ccf00", "#9ae600", "#bbf451", "#5ea500", "#497d00", "#3c6300"];
 
@@ -193,12 +206,9 @@ export default function MonthlyDashboardPage() {
     return { totalBudget, totalSpent, remaining: totalBudget - totalSpent };
   }, [budgets, spentByCategory]);
 
-  const allCategoryOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const r of records) if (r.category) set.add(r.category);
-    for (const b of budgets) if (b.category) set.add(b.category);
-    return Array.from(set).sort();
-  }, [records, budgets]);
+  const allCategoryOptions = activeExpenseCategories.length
+    ? activeExpenseCategories
+    : Array.from(new Set(records.map(r => r.category).filter(Boolean))).sort();
 
   const [budgetCategory, setBudgetCategory] = useState<string>("");
   const [budgetAmount, setBudgetAmount] = useState<number>(0);

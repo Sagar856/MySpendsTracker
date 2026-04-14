@@ -9,6 +9,7 @@ const nav = [
   { to: "/dashboard/monthly", label: "Monthly" },
   { to: "/dashboard/investments", label: "Investments" },
   { to: "/dashboard/loans", label: "Loans" },
+  { to: "/settings", label: "Settings" }
 ];
 
 function NavItem({ to, label }: { to: string; label: string }) {
