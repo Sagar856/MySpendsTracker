@@ -22,6 +22,8 @@ import {
   Legend,
 } from "recharts";
 
+// test
+
 const COLORS = ["#7ccf00", "#9ae600", "#bbf451", "#5ea500", "#497d00", "#3c6300"];
 
 function parseMMDDYYYY(s: string) {
