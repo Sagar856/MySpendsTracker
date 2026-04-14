@@ -72,3 +72,10 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Hide sign-up UI in Netlify Identity widget */
+.netlify-identity-widget .identity-nav .signup,
+.netlify-identity-widget .identity-nav-button.signup,
+.netlify-identity-widget a[href="#signup"] {
+  display: none !important;
+}

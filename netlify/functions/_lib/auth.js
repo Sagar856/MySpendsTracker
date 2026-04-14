@@ -1,8 +1,8 @@
 function requireUser(context) {
   // TEMP BYPASS (disable later)
-  if (process.env.DISABLE_AUTH === "true") {
-    return { ok: true, user: { email: "auth-disabled@local" } };
-  }
+  // if (process.env.DISABLE_AUTH === "true") {
+  //   return { ok: true, user: { email: "auth-disabled@local" } };
+  // }
 
   const user = context?.clientContext?.user;
   if (!user) return { ok: false, response: { statusCode: 401, body: "Unauthorized" } };

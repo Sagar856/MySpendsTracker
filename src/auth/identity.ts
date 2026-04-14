@@ -5,7 +5,8 @@ export function initIdentity() {
 }
 
 export function openLogin() {
-  netlifyIdentity.open();
+  // force login view (no signup tab by default)
+  netlifyIdentity.open("login");
 }
 
 export function logout() {

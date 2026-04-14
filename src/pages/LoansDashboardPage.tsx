@@ -191,31 +191,31 @@ export default function LoansDashboardPage() {
 
   const columns = useMemo<ColumnDef<LoanRecord>[]>(() => {
     return [
-      { accessorKey: "id", header: "ID", size: 70 },
+      { accessorKey: "id", header: "ID", size: 60 },
       {
         id: "initialDate",
         header: "Initial Date",
         accessorFn: (row) => dateToTs(row.initialDate),
         cell: ({ row }) => row.original.initialDate,
-        size: 130,
+        size: 100,
         meta: { className: "hidden md:table-cell" },
       },
       {
         accessorKey: "person",
         header: "Person",
-        size: 220,
+        size: 180,
         cell: ({ row }) => <span className="block truncate" title={row.original.person}>{row.original.person}</span>,
       },
       {
         id: "totalAmount",
         header: "Total",
-        size: 140,
+        size: 100,
         cell: ({ row }) => formatINR(row.original.totalAmount),
       },
       {
         accessorKey: "loanOrLend",
         header: "Type",
-        size: 110,
+        size: 90,
         cell: ({ row }) => (
           <Badge variant={row.original.loanOrLend === "Loan" ? "destructive" : "default"}>
             {row.original.loanOrLend}
@@ -225,7 +225,7 @@ export default function LoansDashboardPage() {
       {
         id: "balanceAmount",
         header: "Balance",
-        size: 140,
+        size: 100,
         cell: ({ row }) => formatINR(row.original.balanceAmount),
       },
       {

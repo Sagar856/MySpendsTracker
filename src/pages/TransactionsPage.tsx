@@ -303,48 +303,48 @@ export default function TransactionsPage() {
 
   const columns = useMemo<ColumnDef<DailyRecord>[]>(() => {
     return [
-      { accessorKey: "id", header: "ID", size: 70 },
+      { accessorKey: "id", header: "ID", size: 50 },
       {
         id: "date",
         header: "Date",
         accessorFn: (row) => dateToTs(row.date),
         cell: ({ row }) => row.original.date,
-        size: 120,
+        size: 100,
       },
-      { id: "amount", header: "Amount", size: 130, cell: ({ row }) => formatINR(row.original.amount) },
+      { id: "amount", header: "Amount", size: 100, cell: ({ row }) => formatINR(row.original.amount) },
 
-      {
-        id: "catType",
-        header: "Cat Type",
-        size: 120,
-        meta: { className: "hidden lg:table-cell" },
-        cell: ({ row }) => <Badge variant="outline">{getType(row.original.category || "NA")}</Badge>,
-      },
+      // {
+      //   id: "catType",
+      //   header: "Cat Type",
+      //   size: 120,
+      //   meta: { className: "hidden lg:table-cell" },
+      //   cell: ({ row }) => <Badge variant="outline">{getType(row.original.category || "NA")}</Badge>,
+      // },
 
       {
         accessorKey: "category",
         header: "Category",
-        size: 200,
+        size: 160,
         cell: ({ row }) => <span className="block truncate" title={row.original.category}>{row.original.category}</span>,
       },
 
-      { accessorKey: "tranType", header: "Type", size: 90 },
-      { accessorKey: "account", header: "Account", size: 140, meta: { className: "hidden lg:table-cell" } },
+      { accessorKey: "tranType", header: "Type", size: 70 },
+      { accessorKey: "account", header: "Account", size: 100, meta: { className: "hidden lg:table-cell" } },
 
       {
         accessorKey: "description",
         header: "Description",
-        size: 340,
+        size: 180,
         cell: ({ row }) => <span className="block truncate" title={row.original.description}>{row.original.description}</span>,
       },
       {
         accessorKey: "place",
         header: "Place / Person",
-        size: 220,
+        size: 180,
         cell: ({ row }) => <span className="block truncate" title={row.original.place}>{row.original.place}</span>,
       },
 
-      { accessorKey: "referenceId", header: "Ref", size: 160, meta: { className: "hidden xl:table-cell" } },
+      { accessorKey: "referenceId", header: "Ref", size: 60, meta: { className: "hidden xl:table-cell" } },
 
       {
         id: "actions",
