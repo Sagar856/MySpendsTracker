@@ -1,7 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+
 import { listDaily } from "../api/daily";
 import { deleteBudget, listBudgets, upsertBudget, type BudgetRecord } from "../api/budgets";
+import { listCategories } from "../api/categories";
 import { formatINR, safeLower, mmddyyyyToISO } from "../lib/format";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,7 +11,6 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { listCategories } from "../api/categories";
 
 import {
   BarChart,
@@ -23,18 +24,6 @@ import {
   Cell,
   Legend,
 } from "recharts";
-
-
-
-const categoriesQ = useQuery({ queryKey: ["categories"], queryFn: listCategories });
-const activeExpenseCategories = useMemo(() => {
-  const rows = categoriesQ.data?.records ?? [];
-  return rows
-    .filter((c) => c.active && c.type === "Expense")
-    .sort((a, b) => (a.sortOrder - b.sortOrder) || a.category.localeCompare(b.category))
-    .map((c) => c.category);
-}, [categoriesQ.data]);
-
 
 const COLORS = ["#7ccf00", "#9ae600", "#bbf451", "#5ea500", "#497d00", "#3c6300"];
 
@@ -62,17 +51,15 @@ function ProgressRow({
   const over = budget > 0 && spent > budget;
   const near = budget > 0 && spent / budget >= 0.85 && spent <= budget;
 
-  const barClass = over
-    ? "bg-destructive"
-    : near
-      ? "bg-primary/80"
-      : "bg-primary";
+  const barClass = over ? "bg-destructive" : near ? "bg-primary/80" : "bg-primary";
 
   return (
     <div className="rounded-md border p-3">
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
-          <div className="font-medium truncate" title={category}>{category}</div>
+          <div className="font-medium truncate" title={category}>
+            {category}
+          </div>
           <div className="text-xs text-muted-foreground">
             Spent {formatINR(spent)} / Budget {formatINR(budget)}
           </div>
@@ -91,9 +78,7 @@ function ProgressRow({
         {budget === 0 ? (
           <span>Set a budget to see progress.</span>
         ) : over ? (
-          <span className="text-destructive">
-            Over by {formatINR(spent - budget)}
-          </span>
+          <span className="text-destructive">Over by {formatINR(spent - budget)}</span>
         ) : (
           <span>Remaining {formatINR(budget - spent)}</span>
         )}
@@ -105,13 +90,29 @@ function ProgressRow({
 export default function MonthlyDashboardPage() {
   const qc = useQueryClient();
 
-  const { data, isLoading } = useQuery({
+  // Daily
+  const dailyQ = useQuery({
     queryKey: ["daily"],
     queryFn: listDaily,
   });
-  const records = data?.records ?? [];
 
-  // Existing filters for "Insights"
+  const records = dailyQ.data?.records ?? [];
+
+  // Categories (for budgets: Expense only)
+  const categoriesQ = useQuery({
+    queryKey: ["categories"],
+    queryFn: listCategories,
+  });
+
+  const activeExpenseCategories = useMemo(() => {
+    const rows = categoriesQ.data?.records ?? [];
+    return rows
+      .filter((c) => c.active && c.type === "Expense")
+      .sort((a, b) => (a.sortOrder - b.sortOrder) || a.category.localeCompare(b.category))
+      .map((c) => c.category);
+  }, [categoriesQ.data]);
+
+  // ---------------- INSIGHTS FILTERS ----------------
   const categories = useMemo(() => {
     const set = new Set(records.map((r) => r.category).filter(Boolean));
     return ["All", ...Array.from(set).sort()];
@@ -148,7 +149,8 @@ export default function MonthlyDashboardPage() {
   }, [records, category, tranType, start, end]);
 
   const totals = useMemo(() => {
-    let credit = 0, debit = 0;
+    let credit = 0,
+      debit = 0;
     for (const r of filtered) {
       if (safeLower(r.tranType) === "credit") credit += r.amount || 0;
       else if (safeLower(r.tranType) === "debit") debit += r.amount || 0;
@@ -175,7 +177,7 @@ export default function MonthlyDashboardPage() {
     return Array.from(map.entries()).map(([name, value]) => ({ name, value }));
   }, [filtered]);
 
-  // -------------------- Budgets --------------------
+  // -------------------- BUDGETS --------------------
   const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
   const [budgetMonth, setBudgetMonth] = useState(currentMonth);
   const [editingBudgetId, setEditingBudgetId] = useState<number | null>(null);
@@ -188,7 +190,6 @@ export default function MonthlyDashboardPage() {
 
   const budgets = budgetsQ.data?.records ?? [];
 
-  // spent per category for selected budgetMonth (Debit only)
   const spentByCategory = useMemo(() => {
     const map = new Map<string, number>();
     for (const r of records) {
@@ -206,18 +207,24 @@ export default function MonthlyDashboardPage() {
     return { totalBudget, totalSpent, remaining: totalBudget - totalSpent };
   }, [budgets, spentByCategory]);
 
-  const allCategoryOptions = activeExpenseCategories.length
-    ? activeExpenseCategories
-    : Array.from(new Set(records.map(r => r.category).filter(Boolean))).sort();
+  // Budget category options: Expense categories if configured, else fallback to existing Daily categories
+  const budgetCategoryOptions = useMemo(() => {
+    if (activeExpenseCategories.length) return activeExpenseCategories;
+    return Array.from(new Set(records.map((r) => r.category).filter(Boolean))).sort();
+  }, [activeExpenseCategories, records]);
 
   const [budgetCategory, setBudgetCategory] = useState<string>("");
   const [budgetAmount, setBudgetAmount] = useState<number>(0);
 
-  // set default category once categories available
-  useMemo(() => {
-    if (!budgetCategory && allCategoryOptions.length) setBudgetCategory(allCategoryOptions[0]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allCategoryOptions.join("|")]);
+  // pick a default budget category when options change
+  useEffect(() => {
+    if (editingBudgetId) return; // don't auto-change during edit mode
+    if (!budgetCategoryOptions.length) return;
+
+    if (!budgetCategory || !budgetCategoryOptions.includes(budgetCategory)) {
+      setBudgetCategory(budgetCategoryOptions[0]);
+    }
+  }, [budgetCategoryOptions, budgetCategory, editingBudgetId]);
 
   const upsertMut = useMutation({
     mutationFn: () =>
@@ -250,7 +257,8 @@ export default function MonthlyDashboardPage() {
     setBudgetAmount(0);
   }
 
-  if (isLoading) return <div>Loading…</div>;
+  if (dailyQ.isLoading) return <div>Loading…</div>;
+  if (dailyQ.isError) return <div className="text-destructive">Failed to load Daily data.</div>;
 
   return (
     <div className="space-y-6">
@@ -272,7 +280,11 @@ export default function MonthlyDashboardPage() {
             <Select value={category} onValueChange={setCategory}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {categories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                {categories.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -282,7 +294,11 @@ export default function MonthlyDashboardPage() {
             <Select value={tranType} onValueChange={setTranType}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {tranTypes.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                {tranTypes.map((t) => (
+                  <SelectItem key={t} value={t}>
+                    {t}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -300,7 +316,9 @@ export default function MonthlyDashboardPage() {
           <div className="md:col-span-4 flex gap-2 flex-wrap">
             <Badge variant="secondary">Credit: {formatINR(totals.credit)}</Badge>
             <Badge variant="secondary">Debit: {formatINR(totals.debit)}</Badge>
-            <Badge variant={totals.net >= 0 ? "default" : "destructive"}>Balance: {formatINR(totals.net)}</Badge>
+            <Badge variant={totals.net >= 0 ? "default" : "destructive"}>
+              Balance: {formatINR(totals.net)}
+            </Badge>
             <Badge variant="outline">Records: {filtered.length}</Badge>
           </div>
         </CardContent>
@@ -309,7 +327,9 @@ export default function MonthlyDashboardPage() {
       {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card className="lg:col-span-2">
-          <CardHeader><CardTitle>Total by Category</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Total by Category</CardTitle>
+          </CardHeader>
           <CardContent style={{ height: 320 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={byCategory}>
@@ -326,12 +346,23 @@ export default function MonthlyDashboardPage() {
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>Credit vs Debit (Count)</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Credit vs Debit (Count)</CardTitle>
+          </CardHeader>
           <CardContent style={{ height: 320 }}>
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
-                <Pie data={creditDebitCounts} dataKey="value" nameKey="name" innerRadius={60} outerRadius={90} label>
-                  {creditDebitCounts.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                <Pie
+                  data={creditDebitCounts}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius={60}
+                  outerRadius={90}
+                  label
+                >
+                  {creditDebitCounts.map((_, i) => (
+                    <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                  ))}
                 </Pie>
                 <Tooltip />
                 <Legend />
@@ -351,23 +382,30 @@ export default function MonthlyDashboardPage() {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-end">
             <div className="lg:col-span-3">
               <label className="text-xs text-muted-foreground">Budget Month</label>
-              <Input
-                type="month"
-                value={budgetMonth}
-                onChange={(e) => setBudgetMonth(e.target.value)}
-              />
+              <Input type="month" value={budgetMonth} onChange={(e) => setBudgetMonth(e.target.value)} />
             </div>
 
             <div className="lg:col-span-4">
               <label className="text-xs text-muted-foreground">Category</label>
-              <Select value={budgetCategory} onValueChange={setBudgetCategory} disabled={!!editingBudgetId}>
+              <Select
+                value={budgetCategory}
+                onValueChange={setBudgetCategory}
+                disabled={!!editingBudgetId}
+              >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {allCategoryOptions.map((c) => (
-                    <SelectItem key={c} value={c}>{c}</SelectItem>
+                  {budgetCategoryOptions.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              {categoriesQ.isError && (
+                <div className="text-[11px] text-destructive mt-1">
+                  Could not load Config categories. Using Daily categories fallback.
+                </div>
+              )}
             </div>
 
             <div className="lg:col-span-3">
@@ -400,15 +438,18 @@ export default function MonthlyDashboardPage() {
                   Cancel
                 </Button>
               )}
-              {editingBudgetId && (
-                <Badge variant="outline">Editing: {budgetCategory}</Badge>
-              )}
             </div>
+
+            {editingBudgetId && (
+              <div className="lg:col-span-12">
+                <Badge variant="outline">Editing: {budgetCategory}</Badge>
+              </div>
+            )}
           </div>
 
           {budgetsQ.isError && (
             <div className="text-sm text-destructive">
-              Failed to load budgets. Ensure Budgets sheet exists with correct headers.
+              Failed to load budgets. Ensure sheet “Budgets” exists with correct headers.
             </div>
           )}
 
@@ -433,7 +474,7 @@ export default function MonthlyDashboardPage() {
             ))}
           </div>
 
-          {/* Budgets list (compact) */}
+          {/* Budgets list */}
           {budgets.length > 0 && (
             <div className="border rounded-md p-3 space-y-2">
               <div className="text-sm font-medium">Manage Budgets</div>
@@ -445,7 +486,9 @@ export default function MonthlyDashboardPage() {
                     className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border rounded-md p-2"
                   >
                     <div className="min-w-0">
-                      <div className="font-medium truncate" title={b.category}>{b.category}</div>
+                      <div className="font-medium truncate" title={b.category}>
+                        {b.category}
+                      </div>
                       <div className="text-xs text-muted-foreground">
                         Budget {formatINR(b.budgetAmount)} • Updated {b.updatedAt}
                       </div>
