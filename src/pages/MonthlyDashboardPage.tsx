@@ -25,7 +25,10 @@ import {
   Legend,
 } from "recharts";
 
+type CategoryTypeFilter = "All" | "Expense" | "Income" | "Investment" | "Loan" | "Unknown";
+
 const COLORS = ["#7ccf00", "#9ae600", "#bbf451", "#5ea500", "#497d00", "#3c6300"];
+const CATEGORY_TYPE_OPTIONS: CategoryTypeFilter[] = ["All", "Expense", "Income", "Investment", "Loan", "Unknown"];
 
 function yearMonthFromDailyDate(mmddyyyy: string) {
   const iso = mmddyyyyToISO(mmddyyyy);
@@ -91,32 +94,44 @@ export default function MonthlyDashboardPage() {
   const qc = useQueryClient();
 
   // Daily
-  const dailyQ = useQuery({
-    queryKey: ["daily"],
-    queryFn: listDaily,
-  });
-
+  const dailyQ = useQuery({ queryKey: ["daily"], queryFn: listDaily });
   const records = dailyQ.data?.records ?? [];
 
-  // Categories (for budgets: Expense only)
-  const categoriesQ = useQuery({
-    queryKey: ["categories"],
-    queryFn: listCategories,
-  });
+  // Categories config
+  const categoriesQ = useQuery({ queryKey: ["categories"], queryFn: listCategories });
+  const categoryConfig = categoriesQ.data?.records ?? [];
 
-  const activeExpenseCategories = useMemo(() => {
-    const rows = categoriesQ.data?.records ?? [];
-    return rows
-      .filter((c) => c.active && c.type === "Expense")
-      .sort((a, b) => (a.sortOrder - b.sortOrder) || a.category.localeCompare(b.category))
-      .map((c) => c.category);
-  }, [categoriesQ.data]);
+  const categoryTypeByName = useMemo(() => {
+    // include inactive too, so old records still get a type
+    const map = new Map<string, string>();
+    for (const c of categoryConfig) map.set(c.category, c.type);
+    return map;
+  }, [categoryConfig]);
+
+  const useTypeSystem = categoryConfig.length > 0;
+
+  const getType = (cat: string): CategoryTypeFilter => {
+    const t = categoryTypeByName.get(cat);
+    if (!t) return "Unknown";
+    if (t === "Expense" || t === "Income" || t === "Investment" || t === "Loan") return t;
+    return "Unknown";
+  };
 
   // ---------------- INSIGHTS FILTERS ----------------
-  const categories = useMemo(() => {
-    const set = new Set(records.map((r) => r.category).filter(Boolean));
-    return ["All", ...Array.from(set).sort()];
-  }, [records]);
+  const [categoryType, setCategoryType] = useState<CategoryTypeFilter>("All");
+
+  const categoriesByTypeOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of records) if (r.category) set.add(r.category);
+
+    const list = Array.from(set).sort();
+    if (categoryType === "All") return ["All", ...list];
+
+    return [
+      "All",
+      ...list.filter((c) => getType(c) === categoryType),
+    ];
+  }, [records, categoryType, categoryTypeByName]);
 
   const tranTypes = useMemo(() => {
     const set = new Set(records.map((r) => r.tranType).filter(Boolean));
@@ -133,11 +148,21 @@ export default function MonthlyDashboardPage() {
   const [start, setStart] = useState(defaultStartISO);
   const [end, setEnd] = useState(defaultEndISO);
 
+  // when category type changes, reset category to All (avoids mismatch)
+  useEffect(() => {
+    setCategory("All");
+  }, [categoryType]);
+
   const filtered = useMemo(() => {
     const s = new Date(start);
     const e = new Date(end);
 
     return records.filter((r) => {
+      // category type filter (only meaningful if config exists)
+      if (categoryType !== "All" && useTypeSystem) {
+        if (getType(r.category || "NA") !== categoryType) return false;
+      }
+
       if (category !== "All" && r.category !== category) return false;
       if (tranType !== "All" && r.tranType !== tranType) return false;
 
@@ -146,11 +171,10 @@ export default function MonthlyDashboardPage() {
       const d = new Date(iso);
       return d >= s && d <= e;
     });
-  }, [records, category, tranType, start, end]);
+  }, [records, categoryType, category, tranType, start, end, useTypeSystem, categoryTypeByName]);
 
   const totals = useMemo(() => {
-    let credit = 0,
-      debit = 0;
+    let credit = 0, debit = 0;
     for (const r of filtered) {
       if (safeLower(r.tranType) === "credit") credit += r.amount || 0;
       else if (safeLower(r.tranType) === "debit") debit += r.amount || 0;
@@ -190,41 +214,61 @@ export default function MonthlyDashboardPage() {
 
   const budgets = budgetsQ.data?.records ?? [];
 
-  const spentByCategory = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const r of records) {
-      if (yearMonthFromDailyDate(r.date) !== budgetMonth) continue;
-      if (safeLower(r.tranType) !== "debit") continue;
-      const cat = r.category || "NA";
-      map.set(cat, (map.get(cat) || 0) + (r.amount || 0));
-    }
-    return map;
-  }, [records, budgetMonth]);
+  // Budget categories should be Expense categories (active) if config exists
+  const activeExpenseCategories = useMemo(() => {
+    const rows = categoryConfig;
+    return rows
+      .filter((c) => c.active && c.type === "Expense")
+      .sort((a, b) => (a.sortOrder - b.sortOrder) || a.category.localeCompare(b.category))
+      .map((c) => c.category);
+  }, [categoryConfig]);
 
-  const budgetSummary = useMemo(() => {
-    const totalBudget = budgets.reduce((a, b) => a + (b.budgetAmount || 0), 0);
-    const totalSpent = budgets.reduce((a, b) => a + (spentByCategory.get(b.category) || 0), 0);
-    return { totalBudget, totalSpent, remaining: totalBudget - totalSpent };
-  }, [budgets, spentByCategory]);
-
-  // Budget category options: Expense categories if configured, else fallback to existing Daily categories
   const budgetCategoryOptions = useMemo(() => {
     if (activeExpenseCategories.length) return activeExpenseCategories;
+    // fallback: if config is missing, allow using any categories from Daily
     return Array.from(new Set(records.map((r) => r.category).filter(Boolean))).sort();
   }, [activeExpenseCategories, records]);
 
   const [budgetCategory, setBudgetCategory] = useState<string>("");
   const [budgetAmount, setBudgetAmount] = useState<number>(0);
 
-  // pick a default budget category when options change
   useEffect(() => {
-    if (editingBudgetId) return; // don't auto-change during edit mode
+    if (editingBudgetId) return;
     if (!budgetCategoryOptions.length) return;
-
     if (!budgetCategory || !budgetCategoryOptions.includes(budgetCategory)) {
       setBudgetCategory(budgetCategoryOptions[0]);
     }
   }, [budgetCategoryOptions, budgetCategory, editingBudgetId]);
+
+  /**
+   * ✅ UPDATED SPENT CALC:
+   * - counts only Debit
+   * - AND category type must be Expense (if type system exists)
+   */
+  const spentByCategory = useMemo(() => {
+    const map = new Map<string, number>();
+
+    for (const r of records) {
+      if (yearMonthFromDailyDate(r.date) !== budgetMonth) continue;
+      if (safeLower(r.tranType) !== "debit") continue;
+
+      const cat = r.category || "NA";
+
+      if (useTypeSystem) {
+        if (getType(cat) !== "Expense") continue; // key change
+      }
+
+      map.set(cat, (map.get(cat) || 0) + (r.amount || 0));
+    }
+
+    return map;
+  }, [records, budgetMonth, useTypeSystem, categoryTypeByName]);
+
+  const budgetSummary = useMemo(() => {
+    const totalBudget = budgets.reduce((a, b) => a + (b.budgetAmount || 0), 0);
+    const totalSpent = budgets.reduce((a, b) => a + (spentByCategory.get(b.category) || 0), 0);
+    return { totalBudget, totalSpent, remaining: totalBudget - totalSpent };
+  }, [budgets, spentByCategory]);
 
   const upsertMut = useMutation({
     mutationFn: () =>
@@ -274,16 +318,32 @@ export default function MonthlyDashboardPage() {
         <CardHeader>
           <CardTitle>Insights Filters</CardTitle>
         </CardHeader>
-        <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-3">
+
+        <CardContent className="grid grid-cols-1 md:grid-cols-5 gap-3">
+          <div>
+            <label className="text-xs text-muted-foreground">Category Type</label>
+            <Select value={categoryType} onValueChange={(v: any) => setCategoryType(v)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {CATEGORY_TYPE_OPTIONS.map((t) => (
+                  <SelectItem key={t} value={t}>{t}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {!useTypeSystem && (
+              <div className="text-[11px] text-muted-foreground mt-1">
+                Category type filter works after Config_Categories is set.
+              </div>
+            )}
+          </div>
+
           <div>
             <label className="text-xs text-muted-foreground">Category</label>
             <Select value={category} onValueChange={setCategory}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {categories.map((c) => (
-                  <SelectItem key={c} value={c}>
-                    {c}
-                  </SelectItem>
+                {categoriesByTypeOptions.map((c) => (
+                  <SelectItem key={c} value={c}>{c}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -295,9 +355,7 @@ export default function MonthlyDashboardPage() {
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 {tranTypes.map((t) => (
-                  <SelectItem key={t} value={t}>
-                    {t}
-                  </SelectItem>
+                  <SelectItem key={t} value={t}>{t}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -313,12 +371,10 @@ export default function MonthlyDashboardPage() {
             <Input type="date" value={end} onChange={(e) => setEnd(e.target.value)} />
           </div>
 
-          <div className="md:col-span-4 flex gap-2 flex-wrap">
+          <div className="md:col-span-5 flex gap-2 flex-wrap">
             <Badge variant="secondary">Credit: {formatINR(totals.credit)}</Badge>
             <Badge variant="secondary">Debit: {formatINR(totals.debit)}</Badge>
-            <Badge variant={totals.net >= 0 ? "default" : "destructive"}>
-              Balance: {formatINR(totals.net)}
-            </Badge>
+            <Badge variant={totals.net >= 0 ? "default" : "destructive"}>Balance: {formatINR(totals.net)}</Badge>
             <Badge variant="outline">Records: {filtered.length}</Badge>
           </div>
         </CardContent>
@@ -327,9 +383,7 @@ export default function MonthlyDashboardPage() {
       {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle>Total by Category</CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle>Total by Category</CardTitle></CardHeader>
           <CardContent style={{ height: 320 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={byCategory}>
@@ -339,30 +393,16 @@ export default function MonthlyDashboardPage() {
                 <Bar dataKey="value" fill="#7ccf00" radius={[6, 6, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
-            <div className="text-xs text-muted-foreground mt-2">
-              Hover to see values. (X labels hidden to stay clean)
-            </div>
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader>
-            <CardTitle>Credit vs Debit (Count)</CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle>Credit vs Debit (Count)</CardTitle></CardHeader>
           <CardContent style={{ height: 320 }}>
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
-                <Pie
-                  data={creditDebitCounts}
-                  dataKey="value"
-                  nameKey="name"
-                  innerRadius={60}
-                  outerRadius={90}
-                  label
-                >
-                  {creditDebitCounts.map((_, i) => (
-                    <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                  ))}
+                <Pie data={creditDebitCounts} dataKey="value" nameKey="name" innerRadius={60} outerRadius={90} label>
+                  {creditDebitCounts.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                 </Pie>
                 <Tooltip />
                 <Legend />
@@ -374,9 +414,7 @@ export default function MonthlyDashboardPage() {
 
       {/* Budgets section */}
       <Card>
-        <CardHeader>
-          <CardTitle>Budgets</CardTitle>
-        </CardHeader>
+        <CardHeader><CardTitle>Budgets</CardTitle></CardHeader>
 
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-end">
@@ -387,25 +425,14 @@ export default function MonthlyDashboardPage() {
 
             <div className="lg:col-span-4">
               <label className="text-xs text-muted-foreground">Category</label>
-              <Select
-                value={budgetCategory}
-                onValueChange={setBudgetCategory}
-                disabled={!!editingBudgetId}
-              >
+              <Select value={budgetCategory} onValueChange={setBudgetCategory} disabled={!!editingBudgetId}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {budgetCategoryOptions.map((c) => (
-                    <SelectItem key={c} value={c}>
-                      {c}
-                    </SelectItem>
+                    <SelectItem key={c} value={c}>{c}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              {categoriesQ.isError && (
-                <div className="text-[11px] text-destructive mt-1">
-                  Could not load Config categories. Using Daily categories fallback.
-                </div>
-              )}
             </div>
 
             <div className="lg:col-span-3">
@@ -423,12 +450,7 @@ export default function MonthlyDashboardPage() {
               <Button
                 className="w-full"
                 onClick={() => upsertMut.mutate()}
-                disabled={
-                  !budgetMonth ||
-                  !budgetCategory ||
-                  upsertMut.isPending ||
-                  Number(budgetAmount) <= 0
-                }
+                disabled={!budgetMonth || !budgetCategory || upsertMut.isPending || Number(budgetAmount) <= 0}
               >
                 {upsertMut.isPending ? "Saving…" : editingBudgetId ? "Update" : "Save"}
               </Button>
@@ -447,12 +469,6 @@ export default function MonthlyDashboardPage() {
             )}
           </div>
 
-          {budgetsQ.isError && (
-            <div className="text-sm text-destructive">
-              Failed to load budgets. Ensure sheet “Budgets” exists with correct headers.
-            </div>
-          )}
-
           <div className="flex flex-wrap gap-2">
             <Badge variant="secondary">Total Budget: {formatINR(budgetSummary.totalBudget)}</Badge>
             <Badge variant="secondary">Spent: {formatINR(budgetSummary.totalSpent)}</Badge>
@@ -462,7 +478,6 @@ export default function MonthlyDashboardPage() {
             <Badge variant="outline">Budget Items: {budgets.length}</Badge>
           </div>
 
-          {/* Progress bars */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {budgets.map((b) => (
               <ProgressRow
@@ -474,36 +489,21 @@ export default function MonthlyDashboardPage() {
             ))}
           </div>
 
-          {/* Budgets list */}
           {budgets.length > 0 && (
             <div className="border rounded-md p-3 space-y-2">
               <div className="text-sm font-medium">Manage Budgets</div>
-
               <div className="space-y-2">
                 {budgets.map((b) => (
-                  <div
-                    key={b.id}
-                    className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border rounded-md p-2"
-                  >
+                  <div key={b.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border rounded-md p-2">
                     <div className="min-w-0">
-                      <div className="font-medium truncate" title={b.category}>
-                        {b.category}
-                      </div>
+                      <div className="font-medium truncate" title={b.category}>{b.category}</div>
                       <div className="text-xs text-muted-foreground">
                         Budget {formatINR(b.budgetAmount)} • Updated {b.updatedAt}
                       </div>
                     </div>
-
                     <div className="flex gap-2 sm:justify-end">
-                      <Button size="sm" variant="outline" onClick={() => onEditBudgetRow(b)}>
-                        Edit
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={() => deleteMut.mutate(b.id)}
-                        disabled={deleteMut.isPending}
-                      >
+                      <Button size="sm" variant="outline" onClick={() => onEditBudgetRow(b)}>Edit</Button>
+                      <Button size="sm" variant="destructive" onClick={() => deleteMut.mutate(b.id)} disabled={deleteMut.isPending}>
                         Delete
                       </Button>
                     </div>
@@ -512,7 +512,7 @@ export default function MonthlyDashboardPage() {
               </div>
 
               <div className="text-xs text-muted-foreground">
-                Spent is calculated from Daily for the selected month (Debit only).
+                Spent is calculated from Daily for the selected month (Debit + Expense-type categories only).
               </div>
             </div>
           )}

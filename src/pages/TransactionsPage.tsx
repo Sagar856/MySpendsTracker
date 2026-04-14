@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 
@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import {
   Dialog,
@@ -27,23 +28,17 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-
 import ResizableDataTable from "@/components/ResizableDataTable";
 
 import { addDaily, deleteDaily, listDaily, updateDaily, type DailyRecord } from "../api/daily";
 import { addLoanTransaction } from "../api/loans";
 import { listCategories } from "../api/categories";
 
-import {
-  ACCOUNTS,
-  TRAN_TYPES,
-  DAILY_PERSON_LIKE_CATEGORIES,
-  FALLBACK_INVESTMENT_CATEGORIES,
-  FALLBACK_LOAN_CATEGORIES,
-} from "../lib/constants";
-
+import { ACCOUNTS, TRAN_TYPES, DAILY_PERSON_LIKE_CATEGORIES } from "../lib/constants";
 import { formatINR, mmddyyyyToISO, safeLower } from "../lib/format";
+
+type CategoryTypeFilter = "All" | "Expense" | "Income" | "Investment" | "Loan" | "Unknown";
+const CATEGORY_TYPE_OPTIONS: CategoryTypeFilter[] = ["All", "Expense", "Income", "Investment", "Loan", "Unknown"];
 
 type FinanceDraft = {
   date: string; // yyyy-mm-dd
@@ -72,8 +67,7 @@ const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
 
 function yearMonthFromDailyDate(mmddyyyy: string) {
   const iso = mmddyyyyToISO(mmddyyyy);
-  if (!iso) return "";
-  return iso.slice(0, 7);
+  return iso ? iso.slice(0, 7) : "";
 }
 
 export default function TransactionsPage() {
@@ -84,34 +78,45 @@ export default function TransactionsPage() {
 
   const records = dailyQ.data?.records ?? [];
   const categoryConfig = categoriesQ.data?.records ?? [];
+  const useTypeSystem = categoryConfig.length > 0;
 
-  const activeCategories = useMemo(() => categoryConfig.filter(c => c.active), [categoryConfig]);
+  const categoryTypeByName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of categoryConfig) map.set(c.category, c.type);
+    return map;
+  }, [categoryConfig]);
 
-  const investmentCategorySet = useMemo(() => {
-    const fromCfg = activeCategories.filter(c => c.type === "Investment").map(c => c.category);
-    const list = fromCfg.length ? fromCfg : [...FALLBACK_INVESTMENT_CATEGORIES];
-    return new Set(list);
-  }, [activeCategories]);
+  const getType = (cat: string): CategoryTypeFilter => {
+    const t = categoryTypeByName.get(cat);
+    if (!t) return "Unknown";
+    if (t === "Expense" || t === "Income" || t === "Investment" || t === "Loan") return t;
+    return "Unknown";
+  };
 
-  const loanCategorySet = useMemo(() => {
-    const fromCfg = activeCategories.filter(c => c.type === "Loan").map(c => c.category);
-    const list = fromCfg.length ? fromCfg : [...FALLBACK_LOAN_CATEGORIES];
-    return new Set(list);
-  }, [activeCategories]);
+  const activeCategories = useMemo(() => categoryConfig.filter((c) => c.active), [categoryConfig]);
 
-  const financeCategories = useMemo(() => {
-    // Finance tab excludes Loan type
-    const fromCfg = activeCategories.filter(c => c.type !== "Loan").map(c => c.category);
-    // fallback: use categories seen in data if config empty
-    const fromData = Array.from(new Set(records.map(r => r.category).filter(Boolean))).sort();
-    const list = fromCfg.length ? fromCfg : fromData;
-    return list.length ? list : ["NA"];
-  }, [activeCategories, records]);
+  // ---------- Add Finance ----------
+  const [financeType, setFinanceType] = useState<CategoryTypeFilter>("Expense");
 
-  // ---- Add Finance
+  const financeCategoryOptions = useMemo(() => {
+    // show only non-loan types in finance form
+    const allowedTypes = new Set(["Expense", "Income", "Investment"]);
+    const type = allowedTypes.has(financeType) ? financeType : "Expense";
+
+    const list = activeCategories
+      .filter((c) => c.type === type)
+      .sort((a, b) => (a.sortOrder - b.sortOrder) || a.category.localeCompare(b.category))
+      .map((c) => c.category);
+
+    if (list.length) return list;
+
+    // fallback: use categories seen in Daily
+    return Array.from(new Set(records.map((r) => r.category).filter(Boolean))).sort();
+  }, [activeCategories, financeType, records]);
+
   const [finance, setFinance] = useState<FinanceDraft>({
     date: todayISO,
-    category: financeCategories[0] || "NA",
+    category: "NA",
     amount: 0,
     tranType: "Debit",
     account: "UPI",
@@ -120,13 +125,13 @@ export default function TransactionsPage() {
     referenceId: "NA",
   });
 
-  // when categories load, ensure selected category is valid
-  useMemo(() => {
-    if (!finance.category && financeCategories.length) {
-      setFinance(s => ({ ...s, category: financeCategories[0] }));
+  // set finance category default when options change
+  useEffect(() => {
+    if (!financeCategoryOptions.length) return;
+    if (!finance.category || !financeCategoryOptions.includes(finance.category)) {
+      setFinance((s) => ({ ...s, category: financeCategoryOptions[0] }));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [financeCategories.join("|")]);
+  }, [financeCategoryOptions]);
 
   const addFinanceMut = useMutation({
     mutationFn: () => addDaily(finance),
@@ -136,7 +141,7 @@ export default function TransactionsPage() {
     },
   });
 
-  // ---- Add Loan/Lend (atomic)
+  // ---------- Add Loan/Lend ----------
   const [loan, setLoan] = useState<LoanDraft>({
     date: todayISO,
     kind: "Loan",
@@ -156,39 +161,50 @@ export default function TransactionsPage() {
     },
   });
 
-  // ---- Quick Filters
+  // ---------- Table filters ----------
+  const [q, setQ] = useState("");
   const [month, setMonth] = useState<string>(currentMonth);
+  const [categoryType, setCategoryType] = useState<CategoryTypeFilter>("All");
   const [categoryFilter, setCategoryFilter] = useState<string>("All");
   const [accountFilter, setAccountFilter] = useState<string>("All");
-  const [typeFilter, setTypeFilter] = useState<string>("All");
+  const [typeFilter, setTypeFilter] = useState<string>("All"); // Credit/Debit/All
 
   const [onlyInvestments, setOnlyInvestments] = useState(false);
   const [onlyLoans, setOnlyLoans] = useState(false);
-
-  // ---- Search
-  const [q, setQ] = useState("");
-
-  const categoryOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const c of activeCategories) set.add(c.category);
-    for (const r of records) if (r.category) set.add(r.category);
-    return ["All", ...Array.from(set).sort()];
-  }, [activeCategories, records]);
 
   const accountOptions = useMemo(() => {
     const set = new Set(records.map((r) => r.account).filter(Boolean));
     return ["All", ...Array.from(set).sort()];
   }, [records]);
 
-  const typeOptions = ["All", "Credit", "Debit"];
+  const categoryOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of categoryConfig) set.add(c.category);
+    for (const r of records) if (r.category) set.add(r.category);
+
+    const list = Array.from(set).sort();
+    if (categoryType === "All") return ["All", ...list];
+
+    return ["All", ...list.filter((c) => getType(c) === categoryType)];
+  }, [records, categoryConfig, categoryType, categoryTypeByName]);
+
+  useEffect(() => {
+    setCategoryFilter("All");
+  }, [categoryType]);
 
   const filtered = useMemo(() => {
     let rows = [...records];
 
     if (month) rows = rows.filter((r) => yearMonthFromDailyDate(r.date) === month);
 
-    if (onlyInvestments) rows = rows.filter((r) => investmentCategorySet.has(r.category));
-    if (onlyLoans) rows = rows.filter((r) => loanCategorySet.has(r.category));
+    // type-based toggles
+    if (onlyInvestments && useTypeSystem) rows = rows.filter((r) => getType(r.category || "NA") === "Investment");
+    if (onlyLoans && useTypeSystem) rows = rows.filter((r) => getType(r.category || "NA") === "Loan");
+
+    // category type filter (only meaningful if config exists)
+    if (categoryType !== "All" && useTypeSystem) {
+      rows = rows.filter((r) => getType(r.category || "NA") === categoryType);
+    }
 
     if (categoryFilter !== "All") rows = rows.filter((r) => r.category === categoryFilter);
     if (accountFilter !== "All") rows = rows.filter((r) => r.account === accountFilter);
@@ -197,31 +213,26 @@ export default function TransactionsPage() {
     const qq = safeLower(q).trim();
     if (qq) {
       rows = rows.filter((r) => {
-        const hay = [
-          r.id,
-          r.date,
-          r.category,
-          r.tranType,
-          r.account,
-          r.description,
-          r.place,
-          r.referenceId,
-        ].map((x) => safeLower(x)).join(" | ");
+        const hay = [r.id, r.date, r.category, r.tranType, r.account, r.description, r.place, r.referenceId]
+          .map((x) => safeLower(x))
+          .join(" | ");
         return hay.includes(qq);
       });
     }
+
     return rows;
   }, [
     records,
     month,
     onlyInvestments,
     onlyLoans,
+    categoryType,
     categoryFilter,
     accountFilter,
     typeFilter,
     q,
-    investmentCategorySet,
-    loanCategorySet,
+    useTypeSystem,
+    categoryTypeByName,
   ]);
 
   const totalCredit = useMemo(
@@ -236,6 +247,7 @@ export default function TransactionsPage() {
 
   function clearFilters() {
     setMonth("");
+    setCategoryType("All");
     setCategoryFilter("All");
     setAccountFilter("All");
     setTypeFilter("All");
@@ -244,7 +256,7 @@ export default function TransactionsPage() {
     setQ("");
   }
 
-  // ---- Edit dialog
+  // ---------- Edit / Delete ----------
   const [editing, setEditing] = useState<DailyRecord | null>(null);
   const [editDraft, setEditDraft] = useState<FinanceDraft | null>(null);
 
@@ -286,23 +298,32 @@ export default function TransactionsPage() {
       { accessorKey: "id", header: "ID", size: 70 },
       { accessorKey: "date", header: "Date", size: 110 },
       { id: "amount", header: "Amount", size: 130, cell: ({ row }) => formatINR(row.original.amount) },
+
+      {
+        id: "catType",
+        header: "Cat Type",
+        size: 120,
+        meta: { className: "hidden lg:table-cell" },
+        cell: ({ row }) => {
+          const t = getType(row.original.category || "NA");
+          return <Badge variant="outline">{t}</Badge>;
+        },
+      },
+
       {
         accessorKey: "category",
         header: "Category",
-        size: 170,
-        cell: ({ row }) => {
-          const cat = row.original.category;
-          const isLoan = loanCategorySet.has(cat);
-          const isInv = investmentCategorySet.has(cat);
-          return (
-            <Badge variant={isLoan ? "secondary" : isInv ? "default" : "outline"}>
-              {cat || "NA"}
-            </Badge>
-          );
-        },
+        size: 180,
+        cell: ({ row }) => (
+          <span className="block truncate" title={row.original.category}>
+            {row.original.category}
+          </span>
+        ),
       },
+
       { accessorKey: "tranType", header: "Type", size: 90 },
       { accessorKey: "account", header: "Account", size: 140, meta: { className: "hidden lg:table-cell" } },
+
       {
         accessorKey: "description",
         header: "Description",
@@ -324,6 +345,7 @@ export default function TransactionsPage() {
         ),
       },
       { accessorKey: "referenceId", header: "Ref", size: 160, meta: { className: "hidden xl:table-cell" } },
+
       {
         id: "actions",
         header: "Actions",
@@ -333,18 +355,26 @@ export default function TransactionsPage() {
           const r = row.original;
           return (
             <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => openEdit(r)}>Edit</Button>
+              <Button variant="outline" size="sm" onClick={() => openEdit(r)}>
+                Edit
+              </Button>
+
               <AlertDialog>
                 <AlertDialogTrigger asChild>
-                  <Button variant="destructive" size="sm" disabled={deleteMut.isPending}>Delete</Button>
+                  <Button variant="destructive" size="sm" disabled={deleteMut.isPending}>
+                    Delete
+                  </Button>
                 </AlertDialogTrigger>
+
                 <AlertDialogContent>
                   <AlertDialogHeader>
                     <AlertDialogTitle>Delete record #{r.id}?</AlertDialogTitle>
                   </AlertDialogHeader>
                   <AlertDialogFooter>
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
-                    <AlertDialogAction onClick={() => deleteMut.mutate(r.id)}>Delete</AlertDialogAction>
+                    <AlertDialogAction onClick={() => deleteMut.mutate(r.id)}>
+                      Delete
+                    </AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>
               </AlertDialog>
@@ -353,7 +383,7 @@ export default function TransactionsPage() {
         },
       },
     ];
-  }, [deleteMut.isPending, loanCategorySet, investmentCategorySet]);
+  }, [deleteMut.isPending, categoryTypeByName]);
 
   if (dailyQ.isLoading) return <div>Loading…</div>;
   if (dailyQ.isError) return <div className="text-destructive">Failed to load Daily records.</div>;
@@ -364,7 +394,7 @@ export default function TransactionsPage() {
         <div className="min-w-0">
           <h1 className="text-xl font-semibold">Transactions</h1>
           <p className="text-sm text-muted-foreground">
-            Categories come from Settings → Categories (Config_Categories sheet).
+            Category types come from Settings → Categories.
           </p>
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -383,6 +413,7 @@ export default function TransactionsPage() {
         <TabsContent value="finance" className="mt-4">
           <Card>
             <CardHeader><CardTitle>Add Finance Record</CardTitle></CardHeader>
+
             <CardContent className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <div>
                 <label className="text-xs text-muted-foreground">Date</label>
@@ -390,23 +421,32 @@ export default function TransactionsPage() {
               </div>
 
               <div>
+                <label className="text-xs text-muted-foreground">Category Type</label>
+                <Select value={financeType} onValueChange={(v: any) => setFinanceType(v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {["Expense", "Income", "Investment"].map((t) => (
+                      <SelectItem key={t} value={t}>{t}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
                 <label className="text-xs text-muted-foreground">Category</label>
                 <Select value={finance.category} onValueChange={(v) => setFinance(s => ({ ...s, category: v }))}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {financeCategories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                    {financeCategoryOptions.map((c) => (
+                      <SelectItem key={c} value={c}>{c}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
-                {categoriesQ.isError && (
-                  <div className="text-[11px] text-destructive mt-1">
-                    Config_Categories not found. Add it to enable managed categories.
-                  </div>
-                )}
               </div>
 
               <div>
                 <label className="text-xs text-muted-foreground">Amount</label>
-                <Input type="number" value={finance.amount} min={0} onChange={(e) => setFinance(s => ({ ...s, amount: Number(e.target.value) }))} />
+                <Input type="number" min={0} value={finance.amount} onChange={(e) => setFinance(s => ({ ...s, amount: Number(e.target.value) }))} />
               </div>
 
               <div>
@@ -429,11 +469,6 @@ export default function TransactionsPage() {
                 </Select>
               </div>
 
-              <div>
-                <label className="text-xs text-muted-foreground">Reference Id</label>
-                <Input value={finance.referenceId} onChange={(e) => setFinance(s => ({ ...s, referenceId: e.target.value }))} />
-              </div>
-
               <div className="sm:col-span-2">
                 <label className="text-xs text-muted-foreground">Description</label>
                 <Input value={finance.description} onChange={(e) => setFinance(s => ({ ...s, description: e.target.value }))} />
@@ -444,10 +479,21 @@ export default function TransactionsPage() {
                 <Input value={finance.place} onChange={(e) => setFinance(s => ({ ...s, place: e.target.value }))} />
               </div>
 
+              <div>
+                <label className="text-xs text-muted-foreground">Reference Id</label>
+                <Input value={finance.referenceId} onChange={(e) => setFinance(s => ({ ...s, referenceId: e.target.value }))} />
+              </div>
+
               <div className="lg:col-span-3 flex gap-2 flex-wrap">
                 <Button onClick={() => addFinanceMut.mutate()} disabled={addFinanceMut.isPending || finance.amount <= 0}>
                   {addFinanceMut.isPending ? "Adding…" : "Add Finance Record"}
                 </Button>
+
+                {!useTypeSystem && (
+                  <span className="text-xs text-muted-foreground">
+                    Tip: Configure category types in Settings → Categories for best results.
+                  </span>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -456,10 +502,16 @@ export default function TransactionsPage() {
         <TabsContent value="loan" className="mt-4">
           <Card>
             <CardHeader><CardTitle>Add Loan / Lend Record</CardTitle></CardHeader>
+
             <CardContent className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               <div>
                 <label className="text-xs text-muted-foreground">Date</label>
                 <Input type="date" value={loan.date} onChange={(e) => setLoan(s => ({ ...s, date: e.target.value }))} />
+              </div>
+
+              <div>
+                <label className="text-xs text-muted-foreground">Category Type</label>
+                <Input value="Loan" readOnly />
               </div>
 
               <div>
@@ -486,12 +538,12 @@ export default function TransactionsPage() {
 
               <div>
                 <label className="text-xs text-muted-foreground">Amount</label>
-                <Input type="number" value={loan.amount} min={0} onChange={(e) => setLoan(s => ({ ...s, amount: Number(e.target.value) }))} />
+                <Input type="number" min={0} value={loan.amount} onChange={(e) => setLoan(s => ({ ...s, amount: Number(e.target.value) }))} />
               </div>
 
               <div>
                 <label className="text-xs text-muted-foreground">Tran Type</label>
-                <Select value={loan.tranType} onValueChange={(v: "Credit" | "Debit") => setLoan(s => ({ ...s, tranType: v }))}>
+                <Select value={loan.tranType} onValueChange={(v: any) => setLoan(s => ({ ...s, tranType: v }))}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="Credit">Credit</SelectItem>
@@ -525,15 +577,12 @@ export default function TransactionsPage() {
                   {addLoanMut.isPending ? "Adding…" : "Add Loan/Lend (Daily + Loans)"}
                 </Button>
               </div>
-
-              <div className="lg:col-span-3 text-xs text-muted-foreground">
-                Note: For Loan/Lend records, <b>Person</b> is stored in Daily’s <b>Place</b> column.
-              </div>
             </CardContent>
           </Card>
         </TabsContent>
       </Tabs>
 
+      {/* All records */}
       <Card>
         <CardHeader className="gap-2">
           <CardTitle>All Daily Records</CardTitle>
@@ -547,6 +596,18 @@ export default function TransactionsPage() {
             <div className="lg:col-span-2">
               <label className="text-xs text-muted-foreground">Month</label>
               <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+            </div>
+
+            <div className="lg:col-span-2">
+              <label className="text-xs text-muted-foreground">Category Type</label>
+              <Select value={categoryType} onValueChange={(v: any) => setCategoryType(v)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {CATEGORY_TYPE_OPTIONS.map((t) => (
+                    <SelectItem key={t} value={t}>{t}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="lg:col-span-2">
@@ -574,22 +635,24 @@ export default function TransactionsPage() {
               <Select value={typeFilter} onValueChange={setTypeFilter}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {typeOptions.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                  {["All", "Credit", "Debit"].map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
 
-            <div className="lg:col-span-12 flex flex-wrap gap-2 pt-2">
+            <div className="lg:col-span-10 flex flex-wrap gap-2 pt-2">
               <Button
                 size="sm"
                 variant={onlyInvestments ? "default" : "outline"}
                 onClick={() => {
-                  setOnlyInvestments(v => {
+                  setOnlyInvestments((v) => {
                     const next = !v;
                     if (next) setOnlyLoans(false);
                     return next;
                   });
                 }}
+                disabled={!useTypeSystem}
+                title={!useTypeSystem ? "Configure category types in Settings to enable" : ""}
               >
                 Only Investments
               </Button>
@@ -598,12 +661,14 @@ export default function TransactionsPage() {
                 size="sm"
                 variant={onlyLoans ? "default" : "outline"}
                 onClick={() => {
-                  setOnlyLoans(v => {
+                  setOnlyLoans((v) => {
                     const next = !v;
                     if (next) setOnlyInvestments(false);
                     return next;
                   });
                 }}
+                disabled={!useTypeSystem}
+                title={!useTypeSystem ? "Configure category types in Settings to enable" : ""}
               >
                 Only Loans/Lends
               </Button>
@@ -611,10 +676,10 @@ export default function TransactionsPage() {
               <Button size="sm" variant="secondary" onClick={clearFilters}>
                 Clear Filters
               </Button>
+            </div>
 
-              <div className="ml-auto text-sm text-muted-foreground">
-                Showing <b>{filtered.length}</b> of {records.length}
-              </div>
+            <div className="lg:col-span-2 pt-2 text-sm text-muted-foreground lg:text-right">
+              Showing <b>{filtered.length}</b> of {records.length}
             </div>
           </div>
         </CardHeader>
@@ -653,6 +718,9 @@ export default function TransactionsPage() {
               <div>
                 <label className="text-xs text-muted-foreground">Category</label>
                 <Input value={editDraft.category} onChange={(e) => setEditDraft(s => s ? ({ ...s, category: e.target.value }) : s)} />
+                <div className="text-[11px] text-muted-foreground mt-1">
+                  Type: <b>{getType(editDraft.category || "NA")}</b>
+                </div>
               </div>
 
               <div>
@@ -685,7 +753,9 @@ export default function TransactionsPage() {
           )}
 
           <DialogFooter className="mt-4">
-            <Button variant="outline" onClick={() => { setEditing(null); setEditDraft(null); }}>Cancel</Button>
+            <Button variant="outline" onClick={() => { setEditing(null); setEditDraft(null); }}>
+              Cancel
+            </Button>
             <Button onClick={() => updateMut.mutate()} disabled={updateMut.isPending || !editDraft || (editDraft.amount ?? 0) <= 0}>
               {updateMut.isPending ? "Saving…" : "Save"}
             </Button>

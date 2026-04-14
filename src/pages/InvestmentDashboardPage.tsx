@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
+
 import { listDaily } from "../api/daily";
 import { listCategories } from "../api/categories";
 import { FALLBACK_INVESTMENT_CATEGORIES } from "../lib/constants";
@@ -9,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+
 import {
   BarChart,
   Bar,
@@ -22,7 +24,8 @@ import {
   Legend,
 } from "recharts";
 
-// test
+type CategoryTypeFilter = "All" | "Expense" | "Income" | "Investment" | "Loan" | "Unknown";
+const CATEGORY_TYPE_OPTIONS: CategoryTypeFilter[] = ["All", "Expense", "Income", "Investment", "Loan", "Unknown"];
 
 const COLORS = ["#7ccf00", "#9ae600", "#bbf451", "#5ea500", "#497d00", "#3c6300"];
 
@@ -39,31 +42,97 @@ export default function InvestmentDashboardPage() {
 
   const all = dailyQ.data?.records ?? [];
   const categoryConfig = categoriesQ.data?.records ?? [];
+  const useTypeSystem = categoryConfig.length > 0;
 
-  const investmentCategories = useMemo(() => {
-    const fromCfg = categoryConfig
-      .filter((c) => c.active && c.type === "Investment")
-      .sort((a, b) => (a.sortOrder - b.sortOrder) || a.category.localeCompare(b.category))
-      .map((c) => c.category);
-
-    return fromCfg.length ? fromCfg : [...FALLBACK_INVESTMENT_CATEGORIES];
+  const categoryTypeByName = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of categoryConfig) map.set(c.category, c.type);
+    return map;
   }, [categoryConfig]);
 
+  const getType = (cat: string): CategoryTypeFilter => {
+    const t = categoryTypeByName.get(cat);
+    if (!t) return "Unknown";
+    if (t === "Expense" || t === "Income" || t === "Investment" || t === "Loan") return t;
+    return "Unknown";
+  };
+
+  // Category Type filter (near Category)
+  const [categoryType, setCategoryType] = useState<CategoryTypeFilter>("Investment");
+
+  // If type system is not available, keep this dashboard investment-only (fallback)
+  useEffect(() => {
+    if (!useTypeSystem) setCategoryType("Investment");
+  }, [useTypeSystem]);
+
+  // Build category list for selected type
+  const categoriesForType = useMemo(() => {
+    // If no config, we can only reliably show fallback investment categories
+    if (!useTypeSystem) return [...FALLBACK_INVESTMENT_CATEGORIES];
+
+    if (categoryType === "All") {
+      // show all distinct categories seen in Daily (better UX than only config)
+      return Array.from(new Set(all.map((r) => r.category).filter(Boolean))).sort();
+    }
+
+    if (categoryType === "Unknown") {
+      // categories that appear in Daily but not in config
+      const set = new Set<string>();
+      for (const r of all) {
+        if (!r.category) continue;
+        if (!categoryTypeByName.has(r.category)) set.add(r.category);
+      }
+      return Array.from(set).sort();
+    }
+
+    // Expense / Income / Investment / Loan
+    const set = new Set<string>();
+    for (const r of all) {
+      if (!r.category) continue;
+      if (getType(r.category) === categoryType) set.add(r.category);
+    }
+    return Array.from(set).sort();
+  }, [useTypeSystem, categoryType, all, categoryTypeByName]);
+
+  const categoryOptions = useMemo(() => ["All", ...categoriesForType], [categoriesForType]);
+  const [category, setCategory] = useState<string>("All");
+
+  // reset invalid selection if type changes
+  useEffect(() => {
+    setCategory("All");
+  }, [categoryType]);
+
+  // Dataset filtered by type + category
+  const baseRecords = useMemo(() => {
+    if (!useTypeSystem) {
+      const set = new Set(FALLBACK_INVESTMENT_CATEGORIES);
+      return all.filter((r) => set.has(r.category as any));
+    }
+
+    if (categoryType === "All") return all;
+
+    if (categoryType === "Unknown") {
+      return all.filter((r) => r.category && !categoryTypeByName.has(r.category));
+    }
+
+    return all.filter((r) => getType(r.category || "NA") === categoryType);
+  }, [all, useTypeSystem, categoryType, categoryTypeByName]);
+
   const records = useMemo(() => {
-    const set = new Set(investmentCategories);
-    return all.filter((r) => set.has(r.category));
-  }, [all, investmentCategories]);
+    if (category === "All") return baseRecords;
+    return baseRecords.filter((r) => r.category === category);
+  }, [baseRecords, category]);
 
-  const categories = ["All", ...investmentCategories];
-
+  // Tran type list
   const tranTypes = useMemo(() => {
     const set = new Set(records.map((r) => r.tranType).filter(Boolean));
     return ["All", ...Array.from(set).sort()];
   }, [records]);
 
+  // Date range + tran filter
   const today = new Date();
   const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-  const [category, setCategory] = useState("All");
+
   const [tranType, setTranType] = useState("All");
   const [start, setStart] = useState(firstOfMonth.toISOString().slice(0, 10));
   const [end, setEnd] = useState(today.toISOString().slice(0, 10));
@@ -71,17 +140,18 @@ export default function InvestmentDashboardPage() {
   const filtered = useMemo(() => {
     const s = new Date(start);
     const e = new Date(end);
+
     return records.filter((r) => {
-      if (category !== "All" && r.category !== category) return false;
       if (tranType !== "All" && r.tranType !== tranType) return false;
       const d = parseMMDDYYYY(r.date);
       if (!d) return false;
       return d >= s && d <= e;
     });
-  }, [records, category, tranType, start, end]);
+  }, [records, tranType, start, end]);
 
   const totals = useMemo(() => {
-    let credit = 0, debit = 0;
+    let credit = 0,
+      debit = 0;
     for (const r of filtered) {
       if (safeLower(r.tranType) === "credit") credit += r.amount || 0;
       else if (safeLower(r.tranType) === "debit") debit += r.amount || 0;
@@ -116,19 +186,49 @@ export default function InvestmentDashboardPage() {
       <div>
         <h1 className="text-xl font-semibold">Investment Dashboard</h1>
         <p className="text-sm text-muted-foreground">
-          Uses categories of type <b>Investment</b> from Settings → Categories (fallbacks used if not configured).
+          Now supports <b>Category Type</b> filtering. If Config_Categories is not set, it falls back to Investment only.
         </p>
       </div>
 
       <Card>
-        <CardHeader><CardTitle>Filters</CardTitle></CardHeader>
-        <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <CardHeader>
+          <CardTitle>Filters</CardTitle>
+        </CardHeader>
+
+        <CardContent className="grid grid-cols-1 md:grid-cols-5 gap-3">
+          <div>
+            <label className="text-xs text-muted-foreground">Category Type</label>
+            <Select
+              value={categoryType}
+              onValueChange={(v: any) => setCategoryType(v)}
+              disabled={!useTypeSystem}
+            >
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {CATEGORY_TYPE_OPTIONS.map((t) => (
+                  <SelectItem key={t} value={t}>
+                    {t}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {!useTypeSystem && (
+              <div className="text-[11px] text-muted-foreground mt-1">
+                Configure Settings → Categories to enable Category Type filtering.
+              </div>
+            )}
+          </div>
+
           <div>
             <label className="text-xs text-muted-foreground">Category</label>
             <Select value={category} onValueChange={setCategory}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {categories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                {categoryOptions.map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -138,7 +238,11 @@ export default function InvestmentDashboardPage() {
             <Select value={tranType} onValueChange={setTranType}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {tranTypes.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                {tranTypes.map((t) => (
+                  <SelectItem key={t} value={t}>
+                    {t}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -153,10 +257,12 @@ export default function InvestmentDashboardPage() {
             <Input type="date" value={end} onChange={(e) => setEnd(e.target.value)} />
           </div>
 
-          <div className="md:col-span-4 flex gap-2 flex-wrap">
+          <div className="md:col-span-5 flex gap-2 flex-wrap">
             <Badge variant="secondary">Credit: {formatINR(totals.credit)}</Badge>
             <Badge variant="secondary">Debit: {formatINR(totals.debit)}</Badge>
-            <Badge variant={totals.net >= 0 ? "default" : "destructive"}>Net Flow: {formatINR(totals.net)}</Badge>
+            <Badge variant={totals.net >= 0 ? "default" : "destructive"}>
+              Net Flow: {formatINR(totals.net)}
+            </Badge>
             <Badge variant="outline">Records: {filtered.length}</Badge>
           </div>
         </CardContent>
@@ -164,7 +270,9 @@ export default function InvestmentDashboardPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card className="lg:col-span-2">
-          <CardHeader><CardTitle>Total by Investment Category</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Total by Category</CardTitle>
+          </CardHeader>
           <CardContent style={{ height: 320 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={byCategory}>
@@ -178,12 +286,16 @@ export default function InvestmentDashboardPage() {
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>Tran Type Distribution (Count)</CardTitle></CardHeader>
+          <CardHeader>
+            <CardTitle>Tran Type Distribution (Count)</CardTitle>
+          </CardHeader>
           <CardContent style={{ height: 320 }}>
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie data={tranCounts} dataKey="value" nameKey="name" innerRadius={60} outerRadius={90} label>
-                  {tranCounts.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                  {tranCounts.map((_, i) => (
+                    <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                  ))}
                 </Pie>
                 <Tooltip />
                 <Legend />
