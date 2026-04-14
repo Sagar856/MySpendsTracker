@@ -31,7 +31,7 @@ import {
 import ResizableDataTable from "@/components/ResizableDataTable";
 
 import { addDaily, deleteDaily, listDaily, updateDaily, type DailyRecord } from "../api/daily";
-import { addLoanTransaction } from "../api/loans";
+import { addLoanTransaction, listLoans } from "../api/loans";
 import { listCategories } from "../api/categories";
 
 import { ACCOUNTS, TRAN_TYPES, DAILY_PERSON_LIKE_CATEGORIES } from "../lib/constants";
@@ -41,7 +41,7 @@ type CategoryTypeFilter = "All" | "Expense" | "Income" | "Investment" | "Loan" |
 const CATEGORY_TYPE_OPTIONS: CategoryTypeFilter[] = ["All", "Expense", "Income", "Investment", "Loan", "Unknown"];
 
 type FinanceDraft = {
-  date: string; // yyyy-mm-dd
+  date: string;
   category: string;
   amount: number;
   tranType: string;
@@ -52,7 +52,7 @@ type FinanceDraft = {
 };
 
 type LoanDraft = {
-  date: string; // yyyy-mm-dd
+  date: string;
   kind: "Loan" | "Lend";
   person: string;
   amount: number;
@@ -63,11 +63,16 @@ type LoanDraft = {
 };
 
 const todayISO = new Date().toISOString().slice(0, 10);
-const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+const currentMonth = new Date().toISOString().slice(0, 7);
 
 function yearMonthFromDailyDate(mmddyyyy: string) {
   const iso = mmddyyyyToISO(mmddyyyy);
   return iso ? iso.slice(0, 7) : "";
+}
+function dateToTs(mmddyyyy: string) {
+  const iso = mmddyyyyToISO(mmddyyyy);
+  const t = iso ? Date.parse(iso) : NaN;
+  return Number.isFinite(t) ? t : 0;
 }
 
 export default function TransactionsPage() {
@@ -75,6 +80,7 @@ export default function TransactionsPage() {
 
   const dailyQ = useQuery({ queryKey: ["daily"], queryFn: listDaily });
   const categoriesQ = useQuery({ queryKey: ["categories"], queryFn: listCategories });
+  const loansQ = useQuery({ queryKey: ["loans"], queryFn: listLoans }); // for Person suggestions
 
   const records = dailyQ.data?.records ?? [];
   const categoryConfig = categoriesQ.data?.records ?? [];
@@ -93,24 +99,30 @@ export default function TransactionsPage() {
     return "Unknown";
   };
 
-  const activeCategories = useMemo(() => categoryConfig.filter((c) => c.active), [categoryConfig]);
+  const personOptions = useMemo(() => {
+    const set = new Set<string>();
+    const loanRows = loansQ.data?.records ?? [];
+    for (const r of loanRows) if (r.person) set.add(r.person.trim());
+    return Array.from(set).filter(Boolean).sort((a, b) => a.localeCompare(b));
+  }, [loansQ.data]);
 
-  // ---------- Add Finance ----------
+  // ---------- Finance form ----------
   const [financeType, setFinanceType] = useState<CategoryTypeFilter>("Expense");
 
+  const activeCategories = useMemo(() => categoryConfig.filter((c) => c.active), [categoryConfig]);
+
   const financeCategoryOptions = useMemo(() => {
-    // show only non-loan types in finance form
     const allowedTypes = new Set(["Expense", "Income", "Investment"]);
     const type = allowedTypes.has(financeType) ? financeType : "Expense";
 
-    const list = activeCategories
+    const fromCfg = activeCategories
       .filter((c) => c.type === type)
       .sort((a, b) => (a.sortOrder - b.sortOrder) || a.category.localeCompare(b.category))
       .map((c) => c.category);
 
-    if (list.length) return list;
+    if (fromCfg.length) return fromCfg;
 
-    // fallback: use categories seen in Daily
+    // fallback
     return Array.from(new Set(records.map((r) => r.category).filter(Boolean))).sort();
   }, [activeCategories, financeType, records]);
 
@@ -125,7 +137,6 @@ export default function TransactionsPage() {
     referenceId: "NA",
   });
 
-  // set finance category default when options change
   useEffect(() => {
     if (!financeCategoryOptions.length) return;
     if (!finance.category || !financeCategoryOptions.includes(finance.category)) {
@@ -141,7 +152,7 @@ export default function TransactionsPage() {
     },
   });
 
-  // ---------- Add Loan/Lend ----------
+  // ---------- Loan/Lend form (append-only; no upsert-by-person) ----------
   const [loan, setLoan] = useState<LoanDraft>({
     date: todayISO,
     kind: "Loan",
@@ -157,6 +168,7 @@ export default function TransactionsPage() {
     mutationFn: () => addLoanTransaction(loan),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["daily"] });
+      await qc.invalidateQueries({ queryKey: ["loans"] });
       setLoan((s) => ({ ...s, person: "", amount: 0, description: "" }));
     },
   });
@@ -167,10 +179,14 @@ export default function TransactionsPage() {
   const [categoryType, setCategoryType] = useState<CategoryTypeFilter>("All");
   const [categoryFilter, setCategoryFilter] = useState<string>("All");
   const [accountFilter, setAccountFilter] = useState<string>("All");
-  const [typeFilter, setTypeFilter] = useState<string>("All"); // Credit/Debit/All
+  const [typeFilter, setTypeFilter] = useState<string>("All");
 
   const [onlyInvestments, setOnlyInvestments] = useState(false);
   const [onlyLoans, setOnlyLoans] = useState(false);
+
+  useEffect(() => {
+    setCategoryFilter("All");
+  }, [categoryType]);
 
   const accountOptions = useMemo(() => {
     const set = new Set(records.map((r) => r.account).filter(Boolean));
@@ -188,23 +204,15 @@ export default function TransactionsPage() {
     return ["All", ...list.filter((c) => getType(c) === categoryType)];
   }, [records, categoryConfig, categoryType, categoryTypeByName]);
 
-  useEffect(() => {
-    setCategoryFilter("All");
-  }, [categoryType]);
-
   const filtered = useMemo(() => {
     let rows = [...records];
 
     if (month) rows = rows.filter((r) => yearMonthFromDailyDate(r.date) === month);
 
-    // type-based toggles
     if (onlyInvestments && useTypeSystem) rows = rows.filter((r) => getType(r.category || "NA") === "Investment");
     if (onlyLoans && useTypeSystem) rows = rows.filter((r) => getType(r.category || "NA") === "Loan");
 
-    // category type filter (only meaningful if config exists)
-    if (categoryType !== "All" && useTypeSystem) {
-      rows = rows.filter((r) => getType(r.category || "NA") === categoryType);
-    }
+    if (categoryType !== "All" && useTypeSystem) rows = rows.filter((r) => getType(r.category || "NA") === categoryType);
 
     if (categoryFilter !== "All") rows = rows.filter((r) => r.category === categoryFilter);
     if (accountFilter !== "All") rows = rows.filter((r) => r.account === accountFilter);
@@ -296,7 +304,13 @@ export default function TransactionsPage() {
   const columns = useMemo<ColumnDef<DailyRecord>[]>(() => {
     return [
       { accessorKey: "id", header: "ID", size: 70 },
-      { accessorKey: "date", header: "Date", size: 110 },
+      {
+        id: "date",
+        header: "Date",
+        accessorFn: (row) => dateToTs(row.date),
+        cell: ({ row }) => row.original.date,
+        size: 120,
+      },
       { id: "amount", header: "Amount", size: 130, cell: ({ row }) => formatINR(row.original.amount) },
 
       {
@@ -304,21 +318,14 @@ export default function TransactionsPage() {
         header: "Cat Type",
         size: 120,
         meta: { className: "hidden lg:table-cell" },
-        cell: ({ row }) => {
-          const t = getType(row.original.category || "NA");
-          return <Badge variant="outline">{t}</Badge>;
-        },
+        cell: ({ row }) => <Badge variant="outline">{getType(row.original.category || "NA")}</Badge>,
       },
 
       {
         accessorKey: "category",
         header: "Category",
-        size: 180,
-        cell: ({ row }) => (
-          <span className="block truncate" title={row.original.category}>
-            {row.original.category}
-          </span>
-        ),
+        size: 200,
+        cell: ({ row }) => <span className="block truncate" title={row.original.category}>{row.original.category}</span>,
       },
 
       { accessorKey: "tranType", header: "Type", size: 90 },
@@ -328,44 +335,33 @@ export default function TransactionsPage() {
         accessorKey: "description",
         header: "Description",
         size: 340,
-        cell: ({ row }) => (
-          <span className="block truncate" title={row.original.description}>
-            {row.original.description}
-          </span>
-        ),
+        cell: ({ row }) => <span className="block truncate" title={row.original.description}>{row.original.description}</span>,
       },
       {
         accessorKey: "place",
         header: "Place / Person",
         size: 220,
-        cell: ({ row }) => (
-          <span className="block truncate" title={row.original.place}>
-            {row.original.place}
-          </span>
-        ),
+        cell: ({ row }) => <span className="block truncate" title={row.original.place}>{row.original.place}</span>,
       },
+
       { accessorKey: "referenceId", header: "Ref", size: 160, meta: { className: "hidden xl:table-cell" } },
 
       {
         id: "actions",
         header: "Actions",
-        size: 160,
+        size: 170,
         enableResizing: false,
+        enableSorting: false,
         cell: ({ row }) => {
           const r = row.original;
           return (
             <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => openEdit(r)}>
-                Edit
-              </Button>
+              <Button variant="outline" size="sm" onClick={() => openEdit(r)}>Edit</Button>
 
               <AlertDialog>
                 <AlertDialogTrigger asChild>
-                  <Button variant="destructive" size="sm" disabled={deleteMut.isPending}>
-                    Delete
-                  </Button>
+                  <Button variant="destructive" size="sm" disabled={deleteMut.isPending}>Delete</Button>
                 </AlertDialogTrigger>
-
                 <AlertDialogContent>
                   <AlertDialogHeader>
                     <AlertDialogTitle>Delete record #{r.id}?</AlertDialogTitle>
@@ -373,7 +369,7 @@ export default function TransactionsPage() {
                   <AlertDialogFooter>
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
                     <AlertDialogAction onClick={() => deleteMut.mutate(r.id)}>
-                      Delete
+                      Yes, Delete
                     </AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>
@@ -393,9 +389,7 @@ export default function TransactionsPage() {
       <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
         <div className="min-w-0">
           <h1 className="text-xl font-semibold">Transactions</h1>
-          <p className="text-sm text-muted-foreground">
-            Category types come from Settings → Categories.
-          </p>
+          <p className="text-sm text-muted-foreground">All actions ask for confirmation.</p>
         </div>
         <div className="flex gap-2 flex-wrap">
           <Badge variant="secondary">Credit: {formatINR(totalCredit)}</Badge>
@@ -437,9 +431,7 @@ export default function TransactionsPage() {
                 <Select value={finance.category} onValueChange={(v) => setFinance(s => ({ ...s, category: v }))}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {financeCategoryOptions.map((c) => (
-                      <SelectItem key={c} value={c}>{c}</SelectItem>
-                    ))}
+                    {financeCategoryOptions.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
@@ -484,16 +476,32 @@ export default function TransactionsPage() {
                 <Input value={finance.referenceId} onChange={(e) => setFinance(s => ({ ...s, referenceId: e.target.value }))} />
               </div>
 
-              <div className="lg:col-span-3 flex gap-2 flex-wrap">
-                <Button onClick={() => addFinanceMut.mutate()} disabled={addFinanceMut.isPending || finance.amount <= 0}>
-                  {addFinanceMut.isPending ? "Adding…" : "Add Finance Record"}
-                </Button>
-
-                {!useTypeSystem && (
-                  <span className="text-xs text-muted-foreground">
-                    Tip: Configure category types in Settings → Categories for best results.
-                  </span>
-                )}
+              <div className="lg:col-span-3">
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button disabled={addFinanceMut.isPending || finance.amount <= 0}>
+                      Add Finance Record
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Confirm add finance record?</AlertDialogTitle>
+                    </AlertDialogHeader>
+                    <div className="text-sm text-muted-foreground space-y-1">
+                      <div>Date: {finance.date}</div>
+                      <div>Category: {finance.category}</div>
+                      <div>Amount: {formatINR(finance.amount)}</div>
+                      <div>Type: {finance.tranType}</div>
+                      <div>Account: {finance.account}</div>
+                    </div>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction onClick={() => addFinanceMut.mutate()}>
+                        Yes, Add
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
               </div>
             </CardContent>
           </Card>
@@ -507,11 +515,6 @@ export default function TransactionsPage() {
               <div>
                 <label className="text-xs text-muted-foreground">Date</label>
                 <Input type="date" value={loan.date} onChange={(e) => setLoan(s => ({ ...s, date: e.target.value }))} />
-              </div>
-
-              <div>
-                <label className="text-xs text-muted-foreground">Category Type</label>
-                <Input value="Loan" readOnly />
               </div>
 
               <div>
@@ -533,7 +536,16 @@ export default function TransactionsPage() {
 
               <div>
                 <label className="text-xs text-muted-foreground">Person</label>
-                <Input value={loan.person} onChange={(e) => setLoan(s => ({ ...s, person: e.target.value }))} />
+                {/* dropdown suggestions + free typing */}
+                <Input
+                  list="person-list"
+                  value={loan.person}
+                  onChange={(e) => setLoan(s => ({ ...s, person: e.target.value }))}
+                  placeholder="Select or type person name"
+                />
+                <datalist id="person-list">
+                  {personOptions.map((p) => <option key={p} value={p} />)}
+                </datalist>
               </div>
 
               <div>
@@ -572,17 +584,43 @@ export default function TransactionsPage() {
                 <Input value={loan.referenceId} onChange={(e) => setLoan(s => ({ ...s, referenceId: e.target.value }))} />
               </div>
 
-              <div className="lg:col-span-3 flex gap-2 flex-wrap">
-                <Button onClick={() => addLoanMut.mutate()} disabled={addLoanMut.isPending || loan.amount <= 0 || !loan.person}>
-                  {addLoanMut.isPending ? "Adding…" : "Add Loan/Lend (Daily + Loans)"}
-                </Button>
+              <div className="lg:col-span-3">
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button disabled={addLoanMut.isPending || loan.amount <= 0 || !loan.person}>
+                      Add Loan/Lend (Daily + Loans)
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Confirm add loan/lend?</AlertDialogTitle>
+                    </AlertDialogHeader>
+                    <div className="text-sm text-muted-foreground space-y-1">
+                      <div>Date: {loan.date}</div>
+                      <div>Type: {loan.kind}</div>
+                      <div>Person: {loan.person}</div>
+                      <div>Amount: {formatINR(loan.amount)}</div>
+                      <div>Account: {loan.account}</div>
+                    </div>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction onClick={() => addLoanMut.mutate()}>
+                        Yes, Add
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+
+                <div className="mt-2 text-xs text-muted-foreground">
+                  Note: Person is stored in Daily’s Place column (schema unchanged).
+                </div>
               </div>
             </CardContent>
           </Card>
         </TabsContent>
       </Tabs>
 
-      {/* All records */}
+      {/* All records table */}
       <Card>
         <CardHeader className="gap-2">
           <CardTitle>All Daily Records</CardTitle>
@@ -603,9 +641,7 @@ export default function TransactionsPage() {
               <Select value={categoryType} onValueChange={(v: any) => setCategoryType(v)}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {CATEGORY_TYPE_OPTIONS.map((t) => (
-                    <SelectItem key={t} value={t}>{t}</SelectItem>
-                  ))}
+                  {CATEGORY_TYPE_OPTIONS.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -652,7 +688,6 @@ export default function TransactionsPage() {
                   });
                 }}
                 disabled={!useTypeSystem}
-                title={!useTypeSystem ? "Configure category types in Settings to enable" : ""}
               >
                 Only Investments
               </Button>
@@ -668,7 +703,6 @@ export default function TransactionsPage() {
                   });
                 }}
                 disabled={!useTypeSystem}
-                title={!useTypeSystem ? "Configure category types in Settings to enable" : ""}
               >
                 Only Loans/Lends
               </Button>
@@ -693,7 +727,7 @@ export default function TransactionsPage() {
             maxHeight="65vh"
           />
           <div className="mt-2 text-xs text-muted-foreground">
-            Drag column edges to resize. Long text is trimmed; hover to see full value.
+            Click headers (ID/Date) to sort. Drag edges to resize.
           </div>
         </CardContent>
       </Card>
@@ -718,9 +752,6 @@ export default function TransactionsPage() {
               <div>
                 <label className="text-xs text-muted-foreground">Category</label>
                 <Input value={editDraft.category} onChange={(e) => setEditDraft(s => s ? ({ ...s, category: e.target.value }) : s)} />
-                <div className="text-[11px] text-muted-foreground mt-1">
-                  Type: <b>{getType(editDraft.category || "NA")}</b>
-                </div>
               </div>
 
               <div>
@@ -756,9 +787,26 @@ export default function TransactionsPage() {
             <Button variant="outline" onClick={() => { setEditing(null); setEditDraft(null); }}>
               Cancel
             </Button>
-            <Button onClick={() => updateMut.mutate()} disabled={updateMut.isPending || !editDraft || (editDraft.amount ?? 0) <= 0}>
-              {updateMut.isPending ? "Saving…" : "Save"}
-            </Button>
+
+            {/* Confirm update */}
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button disabled={updateMut.isPending || !editDraft || (editDraft.amount ?? 0) <= 0}>
+                  Save
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Confirm update record #{editing?.id}?</AlertDialogTitle>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => updateMut.mutate()}>
+                    Yes, Update
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </DialogFooter>
         </DialogContent>
       </Dialog>

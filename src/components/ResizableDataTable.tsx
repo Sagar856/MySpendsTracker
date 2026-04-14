@@ -2,11 +2,14 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   ColumnDef,
   ColumnSizingState,
+  SortingState,
   flexRender,
   getCoreRowModel,
+  getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
 import { cn } from "@/lib/utils";
+import { ArrowUpDown, ChevronDown, ChevronUp } from "lucide-react";
 
 type ColumnMeta = {
   className?: string; // e.g. "hidden lg:table-cell"
@@ -18,10 +21,7 @@ type Props<T> = {
   storageKey: string;
   getRowId: (row: T) => string;
 
-  /** Enables vertical scroll inside table container */
-  maxHeight?: string | number; // e.g. "70vh" or 520
-
-  /** Keeps headers visible while vertically scrolling */
+  maxHeight?: string | number;
   stickyHeader?: boolean;
 
   minColWidth?: number;
@@ -46,6 +46,7 @@ export default function ResizableDataTable<T>({
   }, [storageKey]);
 
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>(initialSizing);
+  const [sorting, setSorting] = useState<SortingState>([]);
 
   useEffect(() => {
     try {
@@ -57,9 +58,11 @@ export default function ResizableDataTable<T>({
     data,
     columns,
     getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
     columnResizeMode: "onChange",
-    state: { columnSizing },
+    state: { columnSizing, sorting },
     onColumnSizingChange: setColumnSizing,
+    onSortingChange: setSorting,
     getRowId,
     defaultColumn: {
       minSize: minColWidth,
@@ -69,7 +72,6 @@ export default function ResizableDataTable<T>({
 
   return (
     <div className="w-full border rounded-md overflow-hidden">
-      {/* Scroll container: both vertical + horizontal */}
       <div
         className="w-full overflow-auto"
         style={{ maxHeight: typeof maxHeight === "number" ? `${maxHeight}px` : maxHeight }}
@@ -80,6 +82,9 @@ export default function ResizableDataTable<T>({
               <tr key={hg.id}>
                 {hg.headers.map((header) => {
                   const meta = (header.column.columnDef.meta as ColumnMeta | undefined) ?? {};
+                  const canSort = header.column.getCanSort();
+                  const sortDir = header.column.getIsSorted(); // false | "asc" | "desc"
+
                   return (
                     <th
                       key={header.id}
@@ -90,9 +95,30 @@ export default function ResizableDataTable<T>({
                         meta.className
                       )}
                     >
-                      {header.isPlaceholder
-                        ? null
-                        : flexRender(header.column.columnDef.header, header.getContext())}
+                      <div
+                        className={cn(
+                          "flex items-center gap-2",
+                          canSort && "cursor-pointer"
+                        )}
+                        onClick={canSort ? header.column.getToggleSortingHandler() : undefined}
+                        title={canSort ? "Click to sort" : undefined}
+                      >
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(header.column.columnDef.header, header.getContext())}
+
+                        {canSort && (
+                          <>
+                            {sortDir === "asc" ? (
+                              <ChevronUp className="h-4 w-4 opacity-70" />
+                            ) : sortDir === "desc" ? (
+                              <ChevronDown className="h-4 w-4 opacity-70" />
+                            ) : (
+                              <ArrowUpDown className="h-4 w-4 opacity-40" />
+                            )}
+                          </>
+                        )}
+                      </div>
 
                       {header.column.getCanResize() && (
                         <div
@@ -138,10 +164,7 @@ export default function ResizableDataTable<T>({
 
             {data.length === 0 && (
               <tr>
-                <td
-                  className="p-4 text-center text-muted-foreground"
-                  colSpan={table.getAllLeafColumns().length}
-                >
+                <td className="p-4 text-center text-muted-foreground" colSpan={table.getAllLeafColumns().length}>
                   No data.
                 </td>
               </tr>

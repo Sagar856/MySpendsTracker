@@ -26,28 +26,28 @@ import {
 } from "recharts";
 
 type CategoryTypeFilter = "All" | "Expense" | "Income" | "Investment" | "Loan" | "Unknown";
+const CATEGORY_TYPE_OPTIONS: CategoryTypeFilter[] = ["All", "Expense", "Income", "Investment", "Loan", "Unknown"];
 
 const COLORS = ["#7ccf00", "#9ae600", "#bbf451", "#5ea500", "#497d00", "#3c6300"];
-const CATEGORY_TYPE_OPTIONS: CategoryTypeFilter[] = ["All", "Expense", "Income", "Investment", "Loan", "Unknown"];
 
 function yearMonthFromDailyDate(mmddyyyy: string) {
   const iso = mmddyyyyToISO(mmddyyyy);
   return iso ? iso.slice(0, 7) : "";
 }
 
+function prevMonth(ym: string) {
+  if (!/^\d{4}-\d{2}$/.test(ym)) return "";
+  const [y, m] = ym.split("-").map(Number);
+  const d = new Date(y, m - 1, 1);
+  d.setMonth(d.getMonth() - 1);
+  return d.toISOString().slice(0, 7);
+}
+
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
-function ProgressRow({
-  category,
-  spent,
-  budget,
-}: {
-  category: string;
-  spent: number;
-  budget: number;
-}) {
+function ProgressRow({ category, spent, budget }: { category: string; spent: number; budget: number }) {
   const pct = budget > 0 ? (spent / budget) * 100 : 0;
   const barPct = clamp(pct, 0, 100);
 
@@ -60,14 +60,11 @@ function ProgressRow({
     <div className="rounded-md border p-3">
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
-          <div className="font-medium truncate" title={category}>
-            {category}
-          </div>
+          <div className="font-medium truncate" title={category}>{category}</div>
           <div className="text-xs text-muted-foreground">
             Spent {formatINR(spent)} / Budget {formatINR(budget)}
           </div>
         </div>
-
         <Badge variant={over ? "destructive" : "secondary"}>
           {budget > 0 ? `${pct.toFixed(0)}%` : "—"}
         </Badge>
@@ -93,22 +90,18 @@ function ProgressRow({
 export default function MonthlyDashboardPage() {
   const qc = useQueryClient();
 
-  // Daily
   const dailyQ = useQuery({ queryKey: ["daily"], queryFn: listDaily });
   const records = dailyQ.data?.records ?? [];
 
-  // Categories config
   const categoriesQ = useQuery({ queryKey: ["categories"], queryFn: listCategories });
   const categoryConfig = categoriesQ.data?.records ?? [];
+  const useTypeSystem = categoryConfig.length > 0;
 
   const categoryTypeByName = useMemo(() => {
-    // include inactive too, so old records still get a type
     const map = new Map<string, string>();
     for (const c of categoryConfig) map.set(c.category, c.type);
     return map;
   }, [categoryConfig]);
-
-  const useTypeSystem = categoryConfig.length > 0;
 
   const getType = (cat: string): CategoryTypeFilter => {
     const t = categoryTypeByName.get(cat);
@@ -117,20 +110,14 @@ export default function MonthlyDashboardPage() {
     return "Unknown";
   };
 
-  // ---------------- INSIGHTS FILTERS ----------------
+  // -------- Insights filters --------
   const [categoryType, setCategoryType] = useState<CategoryTypeFilter>("All");
 
   const categoriesByTypeOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const r of records) if (r.category) set.add(r.category);
-
+    const set = new Set(records.map((r) => r.category).filter(Boolean) as string[]);
     const list = Array.from(set).sort();
     if (categoryType === "All") return ["All", ...list];
-
-    return [
-      "All",
-      ...list.filter((c) => getType(c) === categoryType),
-    ];
+    return ["All", ...list.filter((c) => getType(c) === categoryType)];
   }, [records, categoryType, categoryTypeByName]);
 
   const tranTypes = useMemo(() => {
@@ -148,7 +135,6 @@ export default function MonthlyDashboardPage() {
   const [start, setStart] = useState(defaultStartISO);
   const [end, setEnd] = useState(defaultEndISO);
 
-  // when category type changes, reset category to All (avoids mismatch)
   useEffect(() => {
     setCategory("All");
   }, [categoryType]);
@@ -158,11 +144,9 @@ export default function MonthlyDashboardPage() {
     const e = new Date(end);
 
     return records.filter((r) => {
-      // category type filter (only meaningful if config exists)
       if (categoryType !== "All" && useTypeSystem) {
         if (getType(r.category || "NA") !== categoryType) return false;
       }
-
       if (category !== "All" && r.category !== category) return false;
       if (tranType !== "All" && r.tranType !== tranType) return false;
 
@@ -187,9 +171,7 @@ export default function MonthlyDashboardPage() {
     for (const r of filtered) {
       map.set(r.category || "NA", (map.get(r.category || "NA") || 0) + (r.amount || 0));
     }
-    return Array.from(map.entries())
-      .map(([name, value]) => ({ name, value }))
-      .sort((a, b) => b.value - a.value);
+    return Array.from(map.entries()).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value);
   }, [filtered]);
 
   const creditDebitCounts = useMemo(() => {
@@ -201,8 +183,77 @@ export default function MonthlyDashboardPage() {
     return Array.from(map.entries()).map(([name, value]) => ({ name, value }));
   }, [filtered]);
 
-  // -------------------- BUDGETS --------------------
-  const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
+  // -------- Comparisons (Month vs previous month) --------
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const [compareMonth, setCompareMonth] = useState(currentMonth);
+  const comparePrev = useMemo(() => prevMonth(compareMonth), [compareMonth]);
+
+  function monthTotals(ym: string) {
+    let expense = 0;
+    let income = 0;
+
+    for (const r of records) {
+      if (yearMonthFromDailyDate(r.date) !== ym) continue;
+      const amt = r.amount || 0;
+
+      if (useTypeSystem) {
+        const t = getType(r.category || "NA");
+        if (t === "Expense" && safeLower(r.tranType) === "debit") expense += amt;
+        if (t === "Income" && safeLower(r.tranType) === "credit") income += amt;
+      } else {
+        // fallback: debit=expense, credit=income
+        if (safeLower(r.tranType) === "debit") expense += amt;
+        if (safeLower(r.tranType) === "credit") income += amt;
+      }
+    }
+
+    return { expense, income, net: income - expense };
+  }
+
+  const thisM = useMemo(() => monthTotals(compareMonth), [records, compareMonth, useTypeSystem, categoryTypeByName]);
+  const prevM = useMemo(() => monthTotals(comparePrev), [records, comparePrev, useTypeSystem, categoryTypeByName]);
+
+  const topExpenseChanges = useMemo(() => {
+    // expense categories only
+    const catSet = new Set<string>();
+    for (const r of records) {
+      if (!r.category) continue;
+      const t = useTypeSystem ? getType(r.category) : "Expense";
+      if (t === "Expense") catSet.add(r.category);
+    }
+
+    const spendByCat = (ym: string) => {
+      const map = new Map<string, number>();
+      for (const r of records) {
+        if (yearMonthFromDailyDate(r.date) !== ym) continue;
+        if (safeLower(r.tranType) !== "debit") continue;
+        const cat = r.category || "NA";
+        const t = useTypeSystem ? getType(cat) : "Expense";
+        if (t !== "Expense") continue;
+        map.set(cat, (map.get(cat) || 0) + (r.amount || 0));
+      }
+      return map;
+    };
+
+    const a = spendByCat(compareMonth);
+    const b = spendByCat(comparePrev);
+
+    const rows = Array.from(catSet).map((cat) => {
+      const cur = a.get(cat) || 0;
+      const prev = b.get(cat) || 0;
+      const diff = cur - prev;
+      const pct = prev > 0 ? (diff / prev) * 100 : null;
+      return { cat, cur, prev, diff, pct };
+    });
+
+    // show biggest increases
+    return rows
+      .filter(r => r.cur > 0 || r.prev > 0)
+      .sort((x, y) => (y.diff - x.diff))
+      .slice(0, 8);
+  }, [records, compareMonth, comparePrev, useTypeSystem, categoryTypeByName]);
+
+  // -------- Budgets --------
   const [budgetMonth, setBudgetMonth] = useState(currentMonth);
   const [editingBudgetId, setEditingBudgetId] = useState<number | null>(null);
 
@@ -211,13 +262,10 @@ export default function MonthlyDashboardPage() {
     queryFn: () => listBudgets(budgetMonth),
     enabled: !!budgetMonth,
   });
-
   const budgets = budgetsQ.data?.records ?? [];
 
-  // Budget categories should be Expense categories (active) if config exists
   const activeExpenseCategories = useMemo(() => {
-    const rows = categoryConfig;
-    return rows
+    return categoryConfig
       .filter((c) => c.active && c.type === "Expense")
       .sort((a, b) => (a.sortOrder - b.sortOrder) || a.category.localeCompare(b.category))
       .map((c) => c.category);
@@ -225,7 +273,6 @@ export default function MonthlyDashboardPage() {
 
   const budgetCategoryOptions = useMemo(() => {
     if (activeExpenseCategories.length) return activeExpenseCategories;
-    // fallback: if config is missing, allow using any categories from Daily
     return Array.from(new Set(records.map((r) => r.category).filter(Boolean))).sort();
   }, [activeExpenseCategories, records]);
 
@@ -240,27 +287,18 @@ export default function MonthlyDashboardPage() {
     }
   }, [budgetCategoryOptions, budgetCategory, editingBudgetId]);
 
-  /**
-   * ✅ UPDATED SPENT CALC:
-   * - counts only Debit
-   * - AND category type must be Expense (if type system exists)
-   */
+  // ✅ spent calc uses Expense category type (not just Debit)
   const spentByCategory = useMemo(() => {
     const map = new Map<string, number>();
-
     for (const r of records) {
       if (yearMonthFromDailyDate(r.date) !== budgetMonth) continue;
       if (safeLower(r.tranType) !== "debit") continue;
 
       const cat = r.category || "NA";
-
-      if (useTypeSystem) {
-        if (getType(cat) !== "Expense") continue; // key change
-      }
+      if (useTypeSystem && getType(cat) !== "Expense") continue;
 
       map.set(cat, (map.get(cat) || 0) + (r.amount || 0));
     }
-
     return map;
   }, [records, budgetMonth, useTypeSystem, categoryTypeByName]);
 
@@ -308,33 +346,86 @@ export default function MonthlyDashboardPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-xl font-semibold">Monthly Dashboard</h1>
-        <p className="text-sm text-muted-foreground">
-          Insights from Daily + Budgets progress for a selected month.
-        </p>
+        <p className="text-sm text-muted-foreground">Includes month comparison + budgets.</p>
       </div>
+
+      {/* Comparisons */}
+      <Card>
+        <CardHeader><CardTitle>Monthly Comparison</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+            <div>
+              <label className="text-xs text-muted-foreground">Compare Month</label>
+              <Input type="month" value={compareMonth} onChange={(e) => setCompareMonth(e.target.value)} />
+            </div>
+
+            <div className="md:col-span-3 flex flex-wrap gap-2">
+              <Badge variant="secondary">
+                {compareMonth} Expense: {formatINR(thisM.expense)}
+              </Badge>
+              <Badge variant="secondary">
+                {compareMonth} Income: {formatINR(thisM.income)}
+              </Badge>
+              <Badge variant={thisM.net >= 0 ? "default" : "destructive"}>
+                {compareMonth} Net: {formatINR(thisM.net)}
+              </Badge>
+
+              <Badge variant="outline">
+                Prev ({comparePrev}) Expense: {formatINR(prevM.expense)}
+              </Badge>
+              <Badge variant="outline">
+                Prev ({comparePrev}) Income: {formatINR(prevM.income)}
+              </Badge>
+            </div>
+          </div>
+
+          {!useTypeSystem && (
+            <div className="text-xs text-muted-foreground">
+              Tip: Configure category types in Settings → Categories for accurate Expense/Income comparison. Currently using Credit/Debit fallback.
+            </div>
+          )}
+
+          <div className="border rounded-md p-3">
+            <div className="font-medium mb-2">Top expense category changes (vs previous month)</div>
+            <div className="space-y-2">
+              {topExpenseChanges.map((r) => (
+                <div key={r.cat} className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate font-medium" title={r.cat}>{r.cat}</div>
+                    <div className="text-xs text-muted-foreground">
+                      Prev {formatINR(r.prev)} → Now {formatINR(r.cur)}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className={r.diff >= 0 ? "" : "text-destructive"}>
+                      {r.diff >= 0 ? "+" : ""}{formatINR(r.diff)}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {r.pct === null ? "New" : `${r.pct.toFixed(0)}%`}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {topExpenseChanges.length === 0 && (
+                <div className="text-sm text-muted-foreground">No data.</div>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Insights filters */}
       <Card>
-        <CardHeader>
-          <CardTitle>Insights Filters</CardTitle>
-        </CardHeader>
-
+        <CardHeader><CardTitle>Insights Filters</CardTitle></CardHeader>
         <CardContent className="grid grid-cols-1 md:grid-cols-5 gap-3">
           <div>
             <label className="text-xs text-muted-foreground">Category Type</label>
             <Select value={categoryType} onValueChange={(v: any) => setCategoryType(v)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {CATEGORY_TYPE_OPTIONS.map((t) => (
-                  <SelectItem key={t} value={t}>{t}</SelectItem>
-                ))}
+                {CATEGORY_TYPE_OPTIONS.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
               </SelectContent>
             </Select>
-            {!useTypeSystem && (
-              <div className="text-[11px] text-muted-foreground mt-1">
-                Category type filter works after Config_Categories is set.
-              </div>
-            )}
           </div>
 
           <div>
@@ -342,9 +433,7 @@ export default function MonthlyDashboardPage() {
             <Select value={category} onValueChange={setCategory}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {categoriesByTypeOptions.map((c) => (
-                  <SelectItem key={c} value={c}>{c}</SelectItem>
-                ))}
+                {categoriesByTypeOptions.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -354,9 +443,7 @@ export default function MonthlyDashboardPage() {
             <Select value={tranType} onValueChange={setTranType}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {tranTypes.map((t) => (
-                  <SelectItem key={t} value={t}>{t}</SelectItem>
-                ))}
+                {tranTypes.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -415,7 +502,6 @@ export default function MonthlyDashboardPage() {
       {/* Budgets section */}
       <Card>
         <CardHeader><CardTitle>Budgets</CardTitle></CardHeader>
-
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-end">
             <div className="lg:col-span-3">
@@ -428,9 +514,7 @@ export default function MonthlyDashboardPage() {
               <Select value={budgetCategory} onValueChange={setBudgetCategory} disabled={!!editingBudgetId}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {budgetCategoryOptions.map((c) => (
-                    <SelectItem key={c} value={c}>{c}</SelectItem>
-                  ))}
+                  {budgetCategoryOptions.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -510,9 +594,8 @@ export default function MonthlyDashboardPage() {
                   </div>
                 ))}
               </div>
-
               <div className="text-xs text-muted-foreground">
-                Spent is calculated from Daily for the selected month (Debit + Expense-type categories only).
+                Spent is calculated from Daily for the selected month (Debit + Expense categories only).
               </div>
             </div>
           )}

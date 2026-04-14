@@ -3,7 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
 
 import { listLoans, updateLoan, deleteLoan, type LoanRecord } from "../api/loans";
+import { addLoanPayment, listLoanPayments, settleLoan } from "../api/loanPayments";
 import { formatINR, mmddyyyyToISO, safeLower } from "../lib/format";
+import { ACCOUNTS } from "../lib/constants";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -29,11 +31,18 @@ import { BarChart, Bar, ResponsiveContainer, Tooltip, XAxis, YAxis, PieChart, Pi
 const COLORS = ["#7ccf00", "#9ae600", "#bbf451", "#5ea500", "#497d00", "#3c6300"];
 const todayISO = new Date().toISOString().slice(0, 10);
 
+function dateToTs(mmddyyyy: string) {
+  const iso = mmddyyyyToISO(mmddyyyy);
+  const t = iso ? Date.parse(iso) : NaN;
+  return Number.isFinite(t) ? t : 0;
+}
+
 export default function LoansDashboardPage() {
   const qc = useQueryClient();
-  const { data, isLoading, error } = useQuery({ queryKey: ["loans"], queryFn: listLoans });
-  const records = data?.records ?? [];
+  const loansQ = useQuery({ queryKey: ["loans"], queryFn: listLoans });
+  const records = loansQ.data?.records ?? [];
 
+  // Filters
   const people = useMemo(
     () => ["All", ...Array.from(new Set(records.map(r => r.person).filter(Boolean))).sort()],
     [records]
@@ -60,6 +69,7 @@ export default function LoansDashboardPage() {
     });
   }, [records, person, kind, status]);
 
+  // Metrics
   const outstanding = useMemo(() => {
     const open = filtered.filter(r => safeLower(r.status) !== "settled");
     const loan = open.filter(r => r.loanOrLend === "Loan").reduce((a, r) => a + (r.balanceAmount || 0), 0);
@@ -67,6 +77,7 @@ export default function LoansDashboardPage() {
     return { loan, lend, count: filtered.length };
   }, [filtered]);
 
+  // Charts
   const byPerson = useMemo(() => {
     const map = new Map<string, number>();
     for (const r of filtered) map.set(r.person || "Unknown", (map.get(r.person || "Unknown") || 0) + (r.totalAmount || 0));
@@ -87,6 +98,7 @@ export default function LoansDashboardPage() {
     return Array.from(map.entries()).map(([name, value]) => ({ name, value }));
   }, [filtered]);
 
+  // Edit Loan (Lend&Loan)
   const [editing, setEditing] = useState<LoanRecord | null>(null);
   const [draft, setDraft] = useState({
     person: "",
@@ -129,20 +141,71 @@ export default function LoansDashboardPage() {
     });
   }
 
+  // Payments dialog
+  const [payLoan, setPayLoan] = useState<LoanRecord | null>(null);
+  const paymentsQ = useQuery({
+    queryKey: ["loanPayments", payLoan?.id],
+    queryFn: () => listLoanPayments(payLoan!.id),
+    enabled: !!payLoan?.id,
+  });
+
+  const payments = paymentsQ.data?.records ?? [];
+
+  const [payDate, setPayDate] = useState(todayISO);
+  const [payAmount, setPayAmount] = useState<number>(0);
+  const [payMethod, setPayMethod] = useState<string>("UPI");
+  const [payNote, setPayNote] = useState<string>("");
+
+  const addPaymentMut = useMutation({
+    mutationFn: async () => {
+      if (!payLoan) throw new Error("No loan selected");
+      return addLoanPayment({
+        loanId: payLoan.id,
+        date: payDate,
+        amount: payAmount,
+        method: payMethod,
+        note: payNote,
+      });
+    },
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["loanPayments", payLoan?.id] });
+      await qc.invalidateQueries({ queryKey: ["loans"] });
+      setPayAmount(0);
+      setPayNote("");
+    },
+  });
+
+  const settleMut = useMutation({
+    mutationFn: async (loanId: number) => {
+      return settleLoan({
+        loanId,
+        date: todayISO,
+        method: "UPI",
+        note: "Settled from app",
+      });
+    },
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["loans"] });
+    },
+  });
+
   const columns = useMemo<ColumnDef<LoanRecord>[]>(() => {
     return [
       { accessorKey: "id", header: "ID", size: 70 },
       {
+        id: "initialDate",
+        header: "Initial Date",
+        accessorFn: (row) => dateToTs(row.initialDate),
+        cell: ({ row }) => row.original.initialDate,
+        size: 130,
+        meta: { className: "hidden md:table-cell" },
+      },
+      {
         accessorKey: "person",
         header: "Person",
         size: 220,
-        cell: ({ row }) => (
-          <span className="block truncate" title={row.original.person}>
-            {row.original.person}
-          </span>
-        ),
+        cell: ({ row }) => <span className="block truncate" title={row.original.person}>{row.original.person}</span>,
       },
-      { accessorKey: "initialDate", header: "Initial", size: 120, meta: { className: "hidden md:table-cell" } },
       {
         id: "totalAmount",
         header: "Total",
@@ -170,21 +233,46 @@ export default function LoansDashboardPage() {
         header: "Status",
         size: 140,
         meta: { className: "hidden lg:table-cell" },
-        cell: ({ row }) => (
-          <span className="block truncate" title={row.original.status}>
-            {row.original.status}
-          </span>
-        ),
+        cell: ({ row }) => <span className="block truncate" title={row.original.status}>{row.original.status}</span>,
       },
       {
         id: "actions",
         header: "Actions",
-        size: 160,
+        size: 320,
         enableResizing: false,
+        enableSorting: false,
         cell: ({ row }) => {
           const r = row.original;
+          const isSettled = safeLower(r.status) === "settled" || (r.balanceAmount || 0) <= 0;
+
           return (
-            <div className="flex justify-end gap-2">
+            <div className="flex justify-end gap-2 flex-wrap">
+              <Button size="sm" variant="outline" onClick={() => { setPayLoan(r); }}>
+                Payments
+              </Button>
+
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button size="sm" variant="secondary" disabled={isSettled || settleMut.isPending}>
+                    Mark as settled
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Settle loan #{r.id}?</AlertDialogTitle>
+                  </AlertDialogHeader>
+                  <div className="text-sm text-muted-foreground">
+                    This will add a final payment equal to the remaining balance and set Settled_Date.
+                  </div>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={() => settleMut.mutate(r.id)}>
+                      Yes, Settle
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+
               <Button size="sm" variant="outline" onClick={() => openEdit(r)}>
                 Edit
               </Button>
@@ -199,10 +287,13 @@ export default function LoansDashboardPage() {
                   <AlertDialogHeader>
                     <AlertDialogTitle>Delete loan record #{r.id}?</AlertDialogTitle>
                   </AlertDialogHeader>
+                  <div className="text-sm text-muted-foreground">
+                    This deletes the loan row. Payments in LoanPayments will remain unless you remove them manually.
+                  </div>
                   <AlertDialogFooter>
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
                     <AlertDialogAction onClick={() => deleteMut.mutate(r.id)}>
-                      Delete
+                      Yes, Delete
                     </AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>
@@ -212,16 +303,16 @@ export default function LoansDashboardPage() {
         },
       },
     ];
-  }, [deleteMut.isPending]);
+  }, [deleteMut.isPending, settleMut.isPending]);
 
-  if (isLoading) return <div>Loading…</div>;
-  if (error) return <div className="text-destructive">Failed to load Loans data.</div>;
+  if (loansQ.isLoading) return <div>Loading…</div>;
+  if (loansQ.isError) return <div className="text-destructive">Failed to load Loans data.</div>;
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-xl font-semibold">Loans Dashboard</h1>
-        <p className="text-sm text-muted-foreground">Based on Lend&Loan sheet.</p>
+        <p className="text-sm text-muted-foreground">Now supports repayments + settle from app.</p>
       </div>
 
       <Card>
@@ -294,21 +385,6 @@ export default function LoansDashboardPage() {
             </ResponsiveContainer>
           </CardContent>
         </Card>
-
-        <Card className="lg:col-span-3">
-          <CardHeader><CardTitle>Status Distribution (Count)</CardTitle></CardHeader>
-          <CardContent style={{ height: 300 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={statusCounts} dataKey="value" nameKey="name" innerRadius={70} outerRadius={110} label>
-                  {statusCounts.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                </Pie>
-                <Tooltip />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
       </div>
 
       <Card>
@@ -317,16 +393,119 @@ export default function LoansDashboardPage() {
           <ResizableDataTable
             data={filtered}
             columns={columns}
-            storageKey="daily-table-widths"
+            storageKey="loans-table-widths"
             getRowId={(r) => String(r.id)}
             maxHeight="65vh"
           />
           <div className="mt-2 text-xs text-muted-foreground">
-            Tip: Drag column edges to resize. Long text is trimmed; hover to see full value.
+            Click headers (ID/Initial Date) to sort. Drag edges to resize.
           </div>
         </CardContent>
       </Card>
 
+      {/* Payments dialog */}
+      <Dialog open={!!payLoan} onOpenChange={(v) => { if (!v) setPayLoan(null); }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Payments — Loan #{payLoan?.id}</DialogTitle>
+          </DialogHeader>
+
+          {payLoan && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                <div>
+                  <label className="text-xs text-muted-foreground">Date</label>
+                  <Input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} />
+                </div>
+
+                <div>
+                  <label className="text-xs text-muted-foreground">Amount</label>
+                  <Input type="number" min={0} value={payAmount} onChange={(e) => setPayAmount(Number(e.target.value))} />
+                </div>
+
+                <div>
+                  <label className="text-xs text-muted-foreground">Method</label>
+                  <Select value={payMethod} onValueChange={setPayMethod}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {ACCOUNTS.map(a => <SelectItem key={a} value={a}>{a}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <label className="text-xs text-muted-foreground">Note</label>
+                  <Input value={payNote} onChange={(e) => setPayNote(e.target.value)} />
+                </div>
+
+                <div className="md:col-span-4">
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button disabled={addPaymentMut.isPending || payAmount <= 0}>
+                        Add Payment
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Confirm add payment?</AlertDialogTitle>
+                      </AlertDialogHeader>
+                      <div className="text-sm text-muted-foreground">
+                        Amount: {formatINR(payAmount)} • Date: {payDate}
+                      </div>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => addPaymentMut.mutate()}>
+                          Yes, Add
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </div>
+              </div>
+
+              <div className="border rounded-md overflow-hidden">
+                <div className="max-h-[40vh] overflow-auto">
+                  <table className="w-full text-sm table-fixed">
+                    <thead className="sticky top-0 bg-background border-b">
+                      <tr>
+                        <th className="p-2 text-left w-[80px]">ID</th>
+                        <th className="p-2 text-left w-[120px]">Date</th>
+                        <th className="p-2 text-left w-[140px]">Amount</th>
+                        <th className="p-2 text-left w-[120px]">Method</th>
+                        <th className="p-2 text-left">Note</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {payments.map((p) => (
+                        <tr key={p.id} className="border-b">
+                          <td className="p-2">{p.id}</td>
+                          <td className="p-2">{p.date}</td>
+                          <td className="p-2">{formatINR(p.amount)}</td>
+                          <td className="p-2">{p.method}</td>
+                          <td className="p-2 truncate" title={p.note}>{p.note}</td>
+                        </tr>
+                      ))}
+                      {payments.length === 0 && (
+                        <tr>
+                          <td className="p-4 text-center text-muted-foreground" colSpan={5}>
+                            No payments yet.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="mt-4">
+            <Button variant="outline" onClick={() => setPayLoan(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit dialog */}
       <Dialog open={!!editing} onOpenChange={(v) => { if (!v) setEditing(null); }}>
         <DialogContent className="max-w-xl">
           <DialogHeader><DialogTitle>Edit Loan Record</DialogTitle></DialogHeader>
@@ -366,27 +545,35 @@ export default function LoansDashboardPage() {
             <div>
               <label className="text-xs text-muted-foreground">Settled Date</label>
               <Input type="date" value={draft.settledDate} onChange={(e) => setDraft(s => ({ ...s, settledDate: e.target.value }))} />
-              <div className="text-[11px] text-muted-foreground mt-1">Leave empty if not settled.</div>
             </div>
 
             <div>
               <label className="text-xs text-muted-foreground">Transferred Amount</label>
-              <Input
-                type="number"
-                value={draft.transferredAmount}
-                onChange={(e) => setDraft(s => ({ ...s, transferredAmount: Number(e.target.value) }))}
-              />
+              <Input type="number" value={draft.transferredAmount} onChange={(e) => setDraft(s => ({ ...s, transferredAmount: Number(e.target.value) }))} />
             </div>
           </div>
 
           <DialogFooter className="mt-4">
             <Button variant="outline" onClick={() => setEditing(null)}>Cancel</Button>
-            <Button
-              onClick={() => updateMut.mutate()}
-              disabled={updateMut.isPending || !draft.person || draft.totalAmount <= 0}
-            >
-              {updateMut.isPending ? "Saving…" : "Save"}
-            </Button>
+
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button disabled={updateMut.isPending || !draft.person || draft.totalAmount <= 0}>
+                  Save
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Confirm update loan #{editing?.id}?</AlertDialogTitle>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => updateMut.mutate()}>
+                    Yes, Update
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </DialogFooter>
         </DialogContent>
       </Dialog>
