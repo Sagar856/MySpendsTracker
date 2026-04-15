@@ -14,13 +14,7 @@ import { Button } from "@/components/ui/button";
 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 
 import {
   AlertDialog,
@@ -51,6 +45,10 @@ import {
 
 const COLORS = ["#7ccf00", "#9ae600", "#bbf451", "#5ea500", "#497d00", "#3c6300"];
 const todayISO = new Date().toISOString().slice(0, 10);
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
 
 function dateToTs(mmddyyyy: string) {
   const iso = mmddyyyyToISO(mmddyyyy);
@@ -111,7 +109,6 @@ export default function LoansDashboardPage() {
         const hay = `${r.id} ${r.person} ${r.loanOrLend} ${r.status} ${r.description || ""}`.toLowerCase();
         if (!hay.includes(qq)) return false;
       }
-
       return true;
     });
   }, [records, openOnly, person, kind, status, q]);
@@ -138,7 +135,6 @@ export default function LoansDashboardPage() {
   }, [filtered]);
 
   // ---------------- Charts ----------------
-  // Outstanding by person (Balance_Amount), stacked Loan vs Lend
   const outstandingByPerson = useMemo(() => {
     const open = filtered.filter((r) => !isSettled(r));
     const map = new Map<string, { name: string; loan: number; lend: number; total: number }>();
@@ -158,7 +154,7 @@ export default function LoansDashboardPage() {
     return Array.from(map.values())
       .sort((a, b) => b.total - a.total)
       .slice(0, 12)
-      .reverse(); // reverse for vertical readability
+      .reverse();
   }, [filtered]);
 
   const outstandingSplit = useMemo(() => {
@@ -180,7 +176,7 @@ export default function LoansDashboardPage() {
     ];
   }, [filtered]);
 
-  // ---------------- Edit Loan (Lend&Loan) ----------------
+  // ---------------- Edit Loan ----------------
   const [editing, setEditing] = useState<LoanRecord | null>(null);
   const [draft, setDraft] = useState({
     person: "",
@@ -226,7 +222,6 @@ export default function LoansDashboardPage() {
   // ---------------- Payments dialog ----------------
   const [payLoan, setPayLoan] = useState<LoanRecord | null>(null);
 
-  // Keep payLoan fresh after loans refetch (so remaining updates immediately)
   useEffect(() => {
     if (!payLoan?.id) return;
     const latest = records.find((r) => r.id === payLoan.id);
@@ -254,7 +249,6 @@ export default function LoansDashboardPage() {
   const [payMethod, setPayMethod] = useState<string>("UPI");
   const [payNote, setPayNote] = useState<string>("");
 
-  // Auto-suggest payment amount when opening dialog or when remaining changes
   useEffect(() => {
     if (!payLoan) return;
     setPayAmount(loanTotals.remaining);
@@ -263,12 +257,6 @@ export default function LoansDashboardPage() {
     setPayDate(todayISO);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [payLoan?.id]);
-
-  useEffect(() => {
-    if (!payLoan) return;
-    // If user hasn't typed a custom amount (>0), keep syncing to remaining
-    setPayAmount((prev) => (prev <= 0 ? loanTotals.remaining : prev));
-  }, [loanTotals.remaining, payLoan]);
 
   const addPaymentMut = useMutation({
     mutationFn: async () => {
@@ -285,27 +273,20 @@ export default function LoansDashboardPage() {
       await qc.invalidateQueries({ queryKey: ["loanPayments", payLoan?.id] });
       await qc.invalidateQueries({ queryKey: ["loans"] });
       setPayNote("");
-      // keep amount at remaining (it will recalc after loan refresh)
       setPayAmount(0);
     },
   });
 
   const settleMut = useMutation({
-    mutationFn: async (loanId: number) => {
-      return settleLoan({
-        loanId,
-        date: todayISO,
-        method: "UPI",
-        note: "Settled from app",
-      });
-    },
+    mutationFn: async (loanId: number) =>
+      settleLoan({ loanId, date: todayISO, method: "UPI", note: "Settled from app" }),
     onSuccess: async () => {
       await qc.invalidateQueries({ queryKey: ["loans"] });
       if (payLoan?.id) await qc.invalidateQueries({ queryKey: ["loanPayments", payLoan.id] });
     },
   });
 
-  // ---------------- Table ----------------
+  // ---------------- Table columns ----------------
   const columns = useMemo<ColumnDef<LoanRecord>[]>(() => {
     return [
       { accessorKey: "id", header: "ID", size: 60 },
@@ -323,10 +304,7 @@ export default function LoansDashboardPage() {
         id: "ageDays",
         header: "Age",
         accessorFn: (row) => daysSince(row.initialDate),
-        cell: ({ row }) => {
-          const d = daysSince(row.original.initialDate);
-          return <span title={`${d} days since initial date`}>{d}d</span>;
-        },
+        cell: ({ row }) => `${daysSince(row.original.initialDate)}d`,
         size: 80,
         meta: { className: "hidden lg:table-cell" },
       },
@@ -405,13 +383,14 @@ export default function LoansDashboardPage() {
       },
 
       {
-        accessorKey: "status",
+        id: "statusView",
         header: "Status",
         size: 110,
         meta: { className: "hidden lg:table-cell" },
+        accessorFn: (row) => (isSettled(row) ? "Settled" : "Open"),
         cell: ({ row }) => (
           <Badge variant={isSettled(row.original) ? "secondary" : "outline"}>
-            {isSettled(row.original) ? "Open" : row.original.status || "Open"}
+            {isSettled(row.original) ? "Settled" : "Open"}
           </Badge>
         ),
       },
@@ -443,7 +422,7 @@ export default function LoansDashboardPage() {
                     <AlertDialogTitle>Settle loan #{r.id}?</AlertDialogTitle>
                   </AlertDialogHeader>
                   <div className="text-sm text-muted-foreground">
-                    Adds a final payment equal to remaining balance and sets Settled_Date.
+                    Adds a final payment equal to remaining and sets Settled_Date.
                   </div>
                   <AlertDialogFooter>
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
@@ -469,7 +448,7 @@ export default function LoansDashboardPage() {
                     <AlertDialogTitle>Delete loan record #{r.id}?</AlertDialogTitle>
                   </AlertDialogHeader>
                   <div className="text-sm text-muted-foreground">
-                    This deletes the loan row. Payments in LoanPayments remain unless removed manually.
+                    This deletes the loan row. Payments remain unless removed manually.
                   </div>
                   <AlertDialogFooter>
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
@@ -484,7 +463,7 @@ export default function LoansDashboardPage() {
         },
       },
     ];
-  }, [deleteMut.isPending, settleMut.isPending, payLoan?.id]);
+  }, [deleteMut.isPending, settleMut.isPending]);
 
   if (loansQ.isLoading) return <div>Loading…</div>;
   if (loansQ.isError) return <div className="text-destructive">Failed to load Loans data.</div>;
@@ -502,7 +481,7 @@ export default function LoansDashboardPage() {
       <div className="flex flex-col gap-1">
         <h1 className="text-xl font-semibold">Loans Dashboard</h1>
         <p className="text-sm text-muted-foreground">
-          Open-only view helps you focus on outstanding items. Use Payments to record partial repayments.
+          Open-only view focuses on outstanding loans/lends. Use Payments for partial repayments.
         </p>
       </div>
 
@@ -512,11 +491,7 @@ export default function LoansDashboardPage() {
         <CardContent className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 items-end">
           <div className="lg:col-span-2">
             <label className="text-xs text-muted-foreground">Search</label>
-            <Input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search person / description / id…"
-            />
+            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search person/description/id…" />
           </div>
 
           <div>
@@ -540,7 +515,7 @@ export default function LoansDashboardPage() {
           </div>
 
           <div>
-            <label className="text-xs text-muted-foreground">Status</label>
+            <label className="text-xs text-muted-foreground">Status (sheet)</label>
             <Select value={status} onValueChange={setStatus}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -550,11 +525,7 @@ export default function LoansDashboardPage() {
           </div>
 
           <div className="lg:col-span-5 flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              variant={openOnly ? "default" : "outline"}
-              onClick={() => setOpenOnly((v) => !v)}
-            >
+            <Button size="sm" variant={openOnly ? "default" : "outline"} onClick={() => setOpenOnly((v) => !v)}>
               {openOnly ? "Open Only" : "All (Open + Settled)"}
             </Button>
 
@@ -631,9 +602,7 @@ export default function LoansDashboardPage() {
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie data={outstandingSplit} dataKey="value" nameKey="name" innerRadius={60} outerRadius={95} label>
-                  {outstandingSplit.map((_, i) => (
-                    <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                  ))}
+                  {outstandingSplit.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                 </Pie>
                 <Tooltip formatter={(v: any) => formatINR(Number(v))} />
                 <Legend />
@@ -648,9 +617,7 @@ export default function LoansDashboardPage() {
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie data={statusSplit} dataKey="value" nameKey="name" innerRadius={70} outerRadius={110} label>
-                  {statusSplit.map((_, i) => (
-                    <Cell key={i} fill={COLORS[(i + 2) % COLORS.length]} />
-                  ))}
+                  {statusSplit.map((_, i) => <Cell key={i} fill={COLORS[(i + 2) % COLORS.length]} />)}
                 </Pie>
                 <Tooltip />
                 <Legend />
@@ -671,9 +638,6 @@ export default function LoansDashboardPage() {
             getRowId={(r) => String(r.id)}
             maxHeight="65vh"
           />
-          <div className="mt-2 text-xs text-muted-foreground">
-            Click headers to sort. Drag column edges to resize. Long text is trimmed; hover to see full value.
-          </div>
         </CardContent>
       </Card>
 
@@ -688,7 +652,6 @@ export default function LoansDashboardPage() {
 
           {payLoan && (
             <div className="space-y-4">
-              {/* Totals */}
               <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <div className="rounded-md border p-3">
                   <div className="text-xs text-muted-foreground">Total</div>
@@ -711,7 +674,6 @@ export default function LoansDashboardPage() {
                 </div>
               </div>
 
-              {/* Add payment */}
               <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
                 <div>
                   <label className="text-xs text-muted-foreground">Date</label>
@@ -721,11 +683,14 @@ export default function LoansDashboardPage() {
                 <div>
                   <label className="text-xs text-muted-foreground">Amount</label>
                   <Input
-                    type="number"
-                    min={0}
-                    value={payAmount}
-                    onChange={(e) => setPayAmount(Number(e.target.value))}
-                  />
+                      type="number"
+                      min={0}
+                      value={payAmount === 0 ? "" : payAmount}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setPayAmount(v === "" ? 0 : Number(v));
+                      }}
+                    />
                   <div className="text-[11px] text-muted-foreground mt-1">
                     Suggested: {formatINR(loanTotals.remaining)}
                   </div>
@@ -771,10 +736,7 @@ export default function LoansDashboardPage() {
 
                   <AlertDialog>
                     <AlertDialogTrigger asChild>
-                      <Button
-                        variant="secondary"
-                        disabled={settleMut.isPending || loanTotals.remaining <= 0}
-                      >
+                      <Button variant="secondary" disabled={settleMut.isPending || loanTotals.remaining <= 0}>
                         Mark as Settled
                       </Button>
                     </AlertDialogTrigger>
@@ -796,7 +758,6 @@ export default function LoansDashboardPage() {
                 </div>
               </div>
 
-              {/* Payments list */}
               <div className="border rounded-md overflow-hidden">
                 <div className="max-h-[40vh] overflow-auto">
                   <table className="w-full text-sm table-fixed">
@@ -816,9 +777,7 @@ export default function LoansDashboardPage() {
                           <td className="p-2">{p.date}</td>
                           <td className="p-2">{formatINR(p.amount)}</td>
                           <td className="p-2">{p.method}</td>
-                          <td className="p-2 truncate" title={p.note}>
-                            {p.note}
-                          </td>
+                          <td className="p-2 truncate" title={p.note}>{p.note}</td>
                         </tr>
                       ))}
                       {payments.length === 0 && (

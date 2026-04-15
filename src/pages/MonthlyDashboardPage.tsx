@@ -700,8 +700,11 @@ export default function MonthlyDashboardPage() {
                 type="number"
                 min={1}
                 step={1}
-                value={budgetAmount}
-                onChange={(e) => setBudgetAmount(Number(e.target.value))}
+                value={budgetAmount === 0 ? "" : budgetAmount}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setBudgetAmount(v === "" ? 0 : Number(v));
+                }}
               />
             </div>
 
