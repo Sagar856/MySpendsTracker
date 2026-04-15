@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { listDaily } from "../api/daily";
 import { listCategories } from "../api/categories";
 import { FALLBACK_INVESTMENT_CATEGORIES } from "../lib/constants";
-import { formatINR, safeLower } from "../lib/format";
+import { formatINR, safeLower, mmddyyyyToISO } from "../lib/format";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -22,6 +22,10 @@ import {
   Pie,
   Cell,
   Legend,
+  CartesianGrid,
+  ComposedChart,
+  Line,
+  LineChart,
 } from "recharts";
 
 type CategoryTypeFilter = "All" | "Expense" | "Income" | "Investment" | "Loan" | "Unknown";
@@ -34,6 +38,15 @@ function parseMMDDYYYY(s: string) {
   if (!m) return null;
   const d = new Date(Number(m[3]), Number(m[1]) - 1, Number(m[2]));
   return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function toISODateOrEmpty(mmddyyyy: string) {
+  const iso = mmddyyyyToISO(mmddyyyy);
+  return iso || "";
+}
+
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
 }
 
 export default function InvestmentDashboardPage() {
@@ -67,16 +80,13 @@ export default function InvestmentDashboardPage() {
 
   // Build category list for selected type
   const categoriesForType = useMemo(() => {
-    // If no config, we can only reliably show fallback investment categories
     if (!useTypeSystem) return [...FALLBACK_INVESTMENT_CATEGORIES];
 
     if (categoryType === "All") {
-      // show all distinct categories seen in Daily (better UX than only config)
       return Array.from(new Set(all.map((r) => r.category).filter(Boolean))).sort();
     }
 
     if (categoryType === "Unknown") {
-      // categories that appear in Daily but not in config
       const set = new Set<string>();
       for (const r of all) {
         if (!r.category) continue;
@@ -85,7 +95,6 @@ export default function InvestmentDashboardPage() {
       return Array.from(set).sort();
     }
 
-    // Expense / Income / Investment / Loan
     const set = new Set<string>();
     for (const r of all) {
       if (!r.category) continue;
@@ -97,7 +106,6 @@ export default function InvestmentDashboardPage() {
   const categoryOptions = useMemo(() => ["All", ...categoriesForType], [categoriesForType]);
   const [category, setCategory] = useState<string>("All");
 
-  // reset invalid selection if type changes
   useEffect(() => {
     setCategory("All");
   }, [categoryType]);
@@ -149,44 +157,113 @@ export default function InvestmentDashboardPage() {
     });
   }, [records, tranType, start, end]);
 
+  // ---- Totals (respects filters)
   const totals = useMemo(() => {
-    let credit = 0,
-      debit = 0;
+    let credit = 0;
+    let debit = 0;
+
     for (const r of filtered) {
       if (safeLower(r.tranType) === "credit") credit += r.amount || 0;
       else if (safeLower(r.tranType) === "debit") debit += r.amount || 0;
     }
-    return { credit, debit, net: credit - debit };
+
+    // For investments, a useful interpretation:
+    // - Debit = Invested
+    // - Credit = Redeemed / Returned
+    // - Net Invested = Debit - Credit
+    return { credit, debit, netInvested: debit - credit };
   }, [filtered]);
 
-  const byCategory = useMemo(() => {
+  // ---- Daily flow (Credit/Debit per day) + cumulative net invested (Debit - Credit)
+  const dailyFlow = useMemo(() => {
+    const map = new Map<string, { iso: string; credit: number; debit: number }>();
+
+    for (const r of filtered) {
+      const iso = toISODateOrEmpty(r.date);
+      if (!iso) continue;
+
+      const cur = map.get(iso) || { iso, credit: 0, debit: 0 };
+      if (safeLower(r.tranType) === "credit") cur.credit += r.amount || 0;
+      if (safeLower(r.tranType) === "debit") cur.debit += r.amount || 0;
+      map.set(iso, cur);
+    }
+
+    const arr = Array.from(map.values()).sort((a, b) => a.iso.localeCompare(b.iso));
+
+    let running = 0;
+    return arr.map((x) => {
+      const netInvestedDay = x.debit - x.credit;
+      running += netInvestedDay;
+      return {
+        date: x.iso,
+        invested: x.debit,
+        redeemed: x.credit,
+        redeemedNeg: -x.credit, // show below axis if you want
+        netInvestedDay,
+        cumulativeNetInvested: running,
+      };
+    });
+  }, [filtered]);
+
+  const avgDailyInvested = useMemo(() => {
+    if (!dailyFlow.length) return 0;
+    const sum = dailyFlow.reduce((a, d) => a + d.invested, 0);
+    return sum / dailyFlow.length;
+  }, [dailyFlow]);
+
+  // ---- Category split by invested amount (Debit only)
+  const investedByCategory = useMemo(() => {
     const map = new Map<string, number>();
     for (const r of filtered) {
-      map.set(r.category || "NA", (map.get(r.category || "NA") || 0) + (r.amount || 0));
+      if (safeLower(r.tranType) !== "debit") continue;
+      const cat = r.category || "NA";
+      map.set(cat, (map.get(cat) || 0) + (r.amount || 0));
     }
     return Array.from(map.entries())
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value);
   }, [filtered]);
 
-  const tranCounts = useMemo(() => {
+  const topInvestedCategories = useMemo(() => investedByCategory.slice(0, 10).reverse(), [investedByCategory]);
+
+  // ---- Top descriptions by invested amount (Debit only)
+  const investedByDescription = useMemo(() => {
     const map = new Map<string, number>();
     for (const r of filtered) {
-      const k = r.tranType || "NA";
-      map.set(k, (map.get(k) || 0) + 1);
+      if (safeLower(r.tranType) !== "debit") continue;
+      const desc = String(r.description || "").trim();
+      if (!desc || desc.toLowerCase() === "na") continue;
+      map.set(desc, (map.get(desc) || 0) + (r.amount || 0));
     }
-    return Array.from(map.entries()).map(([name, value]) => ({ name, value }));
+    return Array.from(map.entries())
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 10)
+      .reverse();
   }, [filtered]);
+
+  // ---- Credit vs Debit by amount (pie)
+  const creditDebitPie = useMemo(() => {
+    const creditCount = filtered.filter((r) => safeLower(r.tranType) === "credit").length;
+    const debitCount = filtered.filter((r) => safeLower(r.tranType) === "debit").length;
+
+    return [
+      { name: "Invested (Debit)", value: totals.debit, count: debitCount },
+      { name: "Redeemed (Credit)", value: totals.credit, count: creditCount },
+    ];
+  }, [totals.debit, totals.credit, filtered]);
 
   if (dailyQ.isLoading) return <div>Loading…</div>;
   if (dailyQ.isError) return <div className="text-destructive">Failed to load Daily data.</div>;
+
+  const noData = filtered.length === 0;
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-xl font-semibold">Investment Dashboard</h1>
         <p className="text-sm text-muted-foreground">
-          Now supports <b>Category Type</b> filtering. If Config_Categories is not set, it falls back to Investment only.
+          Charts respect the filters (including Start/End). Invested = <b>Debit</b>, Redeemed = <b>Credit</b>.
         </p>
       </div>
 
@@ -198,11 +275,7 @@ export default function InvestmentDashboardPage() {
         <CardContent className="grid grid-cols-1 md:grid-cols-5 gap-3">
           <div>
             <label className="text-xs text-muted-foreground">Category Type</label>
-            <Select
-              value={categoryType}
-              onValueChange={(v: any) => setCategoryType(v)}
-              disabled={!useTypeSystem}
-            >
+            <Select value={categoryType} onValueChange={(v: any) => setCategoryType(v)} disabled={!useTypeSystem}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 {CATEGORY_TYPE_OPTIONS.map((t) => (
@@ -258,52 +331,149 @@ export default function InvestmentDashboardPage() {
           </div>
 
           <div className="md:col-span-5 flex gap-2 flex-wrap">
-            <Badge variant="secondary">Credit: {formatINR(totals.credit)}</Badge>
-            <Badge variant="secondary">Debit: {formatINR(totals.debit)}</Badge>
-            <Badge variant={totals.net >= 0 ? "default" : "destructive"}>
-              Net Flow: {formatINR(totals.net)}
+            <Badge variant="secondary">Invested (Debit): {formatINR(totals.debit)}</Badge>
+            <Badge variant="secondary">Redeemed (Credit): {formatINR(totals.credit)}</Badge>
+            <Badge variant={totals.netInvested >= 0 ? "default" : "destructive"}>
+              Net Invested: {formatINR(totals.netInvested)}
             </Badge>
             <Badge variant="outline">Records: {filtered.length}</Badge>
+            <Badge variant="outline">Avg Daily Invested: {formatINR(avgDailyInvested)}</Badge>
           </div>
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle>Total by Category</CardTitle>
-          </CardHeader>
-          <CardContent style={{ height: 320 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={byCategory}>
-                <XAxis dataKey="name" />
-                <YAxis />
-                <Tooltip formatter={(v: any) => formatINR(Number(v))} />
-                <Bar dataKey="value" fill="#7ccf00" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-
+      {noData ? (
         <Card>
-          <CardHeader>
-            <CardTitle>Tran Type Distribution (Count)</CardTitle>
-          </CardHeader>
-          <CardContent style={{ height: 320 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={tranCounts} dataKey="value" nameKey="name" innerRadius={60} outerRadius={90} label>
-                  {tranCounts.map((_, i) => (
-                    <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
+          <CardHeader><CardTitle>No Data</CardTitle></CardHeader>
+          <CardContent className="text-sm text-muted-foreground">
+            No investment records match the selected filters/date range.
           </CardContent>
         </Card>
-      </div>
+      ) : (
+        <>
+          {/* Daily flow + cumulative net invested */}
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <Card>
+              <CardHeader><CardTitle>Daily Investment Flow</CardTitle></CardHeader>
+              <CardContent style={{ height: 340 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={dailyFlow}>
+                    <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
+                    <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                    <YAxis tickFormatter={(v) => formatINR(Number(v))} />
+                    <Tooltip
+                      formatter={(v: any, name: any) => {
+                        const key = String(name);
+                        if (key === "redeemedNeg") return null;
+                        return [formatINR(Number(v)), key];
+                      }}
+                      labelFormatter={(label) => `Date: ${label}`}
+                    />
+                    <Legend />
+                    <Bar dataKey="invested" name="Invested (Debit)" fill="#7ccf00" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="redeemed" name="Redeemed (Credit)" fill="#5ea500" radius={[4, 4, 0, 0]} />
+                    <Line
+                      type="monotone"
+                      dataKey="netInvestedDay"
+                      name="Net Invested (Day)"
+                      stroke="#3c6300"
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader><CardTitle>Cumulative Net Invested</CardTitle></CardHeader>
+              <CardContent style={{ height: 340 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={dailyFlow}>
+                    <CartesianGrid strokeDasharray="3 3" opacity={0.25} />
+                    <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                    <YAxis tickFormatter={(v) => formatINR(Number(v))} />
+                    <Tooltip
+                      formatter={(v: any) => formatINR(Number(v))}
+                      labelFormatter={(label) => `Date: ${label}`}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="cumulativeNetInvested"
+                      name="Cumulative Net Invested"
+                      stroke="#7ccf00"
+                      strokeWidth={2}
+                      dot={false}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Split + top lists */}
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+            <Card className="xl:col-span-1">
+              <CardHeader><CardTitle>Invested vs Redeemed (Amount)</CardTitle></CardHeader>
+              <CardContent style={{ height: 320 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={creditDebitPie}
+                      dataKey="value"
+                      nameKey="name"
+                      innerRadius={60}
+                      outerRadius={95}
+                      label
+                    >
+                      {creditDebitPie.map((_, i) => (
+                        <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      formatter={(v: any, _name: any, item: any) => {
+                        const count = item?.payload?.count ?? 0;
+                        return [`${formatINR(Number(v))} (${count} txns)`, "Amount"];
+                      }}
+                    />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <Card className="xl:col-span-1">
+              <CardHeader><CardTitle>Top Categories (Invested - Debit)</CardTitle></CardHeader>
+              <CardContent style={{ height: 320 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={topInvestedCategories} layout="vertical" margin={{ left: 24 }}>
+                    <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                    <XAxis type="number" tickFormatter={(v) => formatINR(Number(v))} />
+                    <YAxis type="category" dataKey="name" width={130} tick={{ fontSize: 11 }} />
+                    <Tooltip formatter={(v: any) => formatINR(Number(v))} />
+                    <Bar dataKey="value" fill="#7ccf00" radius={[6, 6, 6, 6]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <Card className="xl:col-span-1">
+              <CardHeader><CardTitle>Top Descriptions (Invested - Debit)</CardTitle></CardHeader>
+              <CardContent style={{ height: 320 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={investedByDescription} layout="vertical" margin={{ left: 24 }}>
+                    <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                    <XAxis type="number" tickFormatter={(v) => formatINR(Number(v))} />
+                    <YAxis type="category" dataKey="name" width={130} tick={{ fontSize: 11 }} />
+                    <Tooltip formatter={(v: any) => formatINR(Number(v))} />
+                    <Bar dataKey="value" fill="#5ea500" radius={[6, 6, 6, 6]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          </div>
+        </>
+      )}
     </div>
   );
 }
