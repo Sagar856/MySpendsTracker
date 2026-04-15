@@ -436,63 +436,6 @@ export default function MonthlyDashboardPage() {
         </p>
       </div>
 
-      {/* Monthly comparison */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Monthly Comparison</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
-            <div>
-              <label className="text-xs text-muted-foreground">Compare Month</label>
-              <Input type="month" value={compareMonth} onChange={(e) => setCompareMonth(e.target.value)} />
-            </div>
-
-            <div className="md:col-span-3 flex flex-wrap gap-2">
-              <Badge variant="secondary">{compareMonth} Expense: {formatINR(thisM.expense)}</Badge>
-              <Badge variant="secondary">{compareMonth} Income: {formatINR(thisM.income)}</Badge>
-              <Badge variant={thisM.net >= 0 ? "default" : "destructive"}>{compareMonth} Net: {formatINR(thisM.net)}</Badge>
-
-              <Badge variant="outline">Prev ({comparePrev}) Expense: {formatINR(prevM.expense)}</Badge>
-              <Badge variant="outline">Prev ({comparePrev}) Income: {formatINR(prevM.income)}</Badge>
-            </div>
-          </div>
-
-          {!useTypeSystem && (
-            <div className="text-xs text-muted-foreground">
-              Tip: Configure category types in Settings → Categories for accurate Expense/Income comparison. Using Credit/Debit fallback right now.
-            </div>
-          )}
-
-          <div className="border rounded-md p-3">
-            <div className="font-medium mb-2">Top expense category changes (vs previous month)</div>
-            <div className="space-y-2">
-              {topExpenseChanges.map((r) => (
-                <div key={r.cat} className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="truncate font-medium" title={r.cat}>{r.cat}</div>
-                    <div className="text-xs text-muted-foreground">
-                      Prev {formatINR(r.prev)} → Now {formatINR(r.cur)}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className={r.diff >= 0 ? "" : "text-destructive"}>
-                      {r.diff >= 0 ? "+" : ""}{formatINR(r.diff)}
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      {r.pct === null ? "New" : `${r.pct.toFixed(0)}%`}
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {topExpenseChanges.length === 0 && (
-                <div className="text-sm text-muted-foreground">No data.</div>
-              )}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
       {/* Insights filters */}
       <Card>
         <CardHeader><CardTitle>Insights Filters</CardTitle></CardHeader>
@@ -788,6 +731,63 @@ export default function MonthlyDashboardPage() {
               </div>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      {/* Monthly comparison */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Monthly Comparison</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+            <div>
+              <label className="text-xs text-muted-foreground">Compare Month</label>
+              <Input type="month" value={compareMonth} onChange={(e) => setCompareMonth(e.target.value)} />
+            </div>
+
+            <div className="md:col-span-3 flex flex-wrap gap-2">
+              <Badge variant="secondary">{compareMonth} Expense: {formatINR(thisM.expense)}</Badge>
+              <Badge variant="secondary">{compareMonth} Income: {formatINR(thisM.income)}</Badge>
+              <Badge variant={thisM.net >= 0 ? "default" : "destructive"}>{compareMonth} Net: {formatINR(thisM.net)}</Badge>
+
+              <Badge variant="outline">Prev ({comparePrev}) Expense: {formatINR(prevM.expense)}</Badge>
+              <Badge variant="outline">Prev ({comparePrev}) Income: {formatINR(prevM.income)}</Badge>
+            </div>
+          </div>
+
+          {!useTypeSystem && (
+            <div className="text-xs text-muted-foreground">
+              Tip: Configure category types in Settings → Categories for accurate Expense/Income comparison. Using Credit/Debit fallback right now.
+            </div>
+          )}
+
+          <div className="border rounded-md p-3">
+            <div className="font-medium mb-2">Top expense category changes (vs previous month)</div>
+            <div className="space-y-2">
+              {topExpenseChanges.map((r) => (
+                <div key={r.cat} className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate font-medium" title={r.cat}>{r.cat}</div>
+                    <div className="text-xs text-muted-foreground">
+                      Prev {formatINR(r.prev)} → Now {formatINR(r.cur)}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className={r.diff >= 0 ? "" : "text-destructive"}>
+                      {r.diff >= 0 ? "+" : ""}{formatINR(r.diff)}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {r.pct === null ? "New" : `${r.pct.toFixed(0)}%`}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {topExpenseChanges.length === 0 && (
+                <div className="text-sm text-muted-foreground">No data.</div>
+              )}
+            </div>
+          </div>
         </CardContent>
       </Card>
     </div>
